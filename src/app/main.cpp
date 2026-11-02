@@ -111,6 +111,8 @@ bool App::init(HINSTANCE inst, int show) {
     UpdateWindow(hwnd_);
     SetTimer(hwnd_, 1, 33, nullptr);
     startReceiver();
+    startAndroid();
+    checkUsbIphone();
     return true;
 }
 
@@ -181,6 +183,7 @@ void App::applySettings(bool reannounce) {
     cfg.audioEnabled = settings_.audio;
     if (reannounce) rx_.updateConfig(cfg);
     else rx_.updateConfig(cfg);
+    android_.updateConfig(androidConfig());
 }
 
 int App::run() {
@@ -189,6 +192,8 @@ int App::run() {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+    android_.stop();
+    stopAdb();
     rx_.stop();
     audio_.stop();
     if (logFile_) {
@@ -278,6 +283,10 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         }
         if (!inMirror || !haveFrame_ || paused_) animate = true;  // home pulse, spinners, progress
         if (toastUntil_ && now < toastUntil_ + 400) animate = true;
+        if (now - ifaceCheck_ >= 2000) {
+            ifaceCheck_ = now;
+            checkUsbIphone();
+        }
         if (now - fpsStamp_ >= 1000) {
             fps_ = fpsCount_;
             fpsCount_ = 0;
@@ -416,7 +425,7 @@ void App::click(int hit) {
     case H_AUDIO:
         settings_.audio = !settings_.audio;
         applySettings(false);
-        if (settings_.audio && audioActive_) audio_.start();
+        if (settings_.audio && audioActive_) audio_.start(audioRate_);
         if (!settings_.audio) audio_.stop();
         break;
     case H_AUTOFS:
@@ -432,7 +441,15 @@ void App::click(int hit) {
         setFullscreen(!fullscreen_);
         break;
     case H_DISCONNECT:
-        rx_.disconnectClient();
+        if (clientIsUsb()) android_.disconnect();
+        else rx_.disconnectClient();
+        break;
+    case H_ANDROID:
+        settings_.usbAndroid = !settings_.usbAndroid;
+        applySettings(false);
+        break;
+    case H_USB_ACTION:
+        android_.mirrorAgain();
         break;
     case H_FIREWALL:
     case H_FIREWALL_LINK:
@@ -577,7 +594,8 @@ void App::handleEvent(Event* e) {
         break;
     case EV_AUDIO_START:
         audioActive_ = true;
-        if (settings_.audio) audio_.start();
+        audioRate_ = (int)e->f == mn::kAudioPcm48k ? 48000 : 44100;
+        if (settings_.audio) audio_.start(audioRate_);
         updateGain();
         break;
     case EV_AUDIO_STOP:
@@ -602,6 +620,18 @@ void App::handleEvent(Event* e) {
         progDur_ = e->d2;
         progStamp_ = mn::now_ms();
         break;
+    case EV_ANDROID_STATUS: {
+        mn::AndroidState prev = usbStatus_.state;
+        usbStatus_.state = (mn::AndroidState)e->i;
+        usbStatus_.device = e->s1;
+        usbStatus_.detail = e->s2;
+        mn::logf(mn::LogLevel::Debug, "android: status %d", e->i);
+        if (usbStatus_.state == mn::AndroidState::Unauthorized && prev != usbStatus_.state)
+            showToast(L"Tap “Allow” on your phone to mirror it over USB");
+        else if (usbStatus_.state == mn::AndroidState::Failed && prev != usbStatus_.state)
+            showToast(L"Couldn't mirror " + (e->s1.empty() ? std::wstring(L"the phone") : from_utf8(e->s1)) + L" over USB");
+        break;
+    }
     case EV_FIREWALL_DONE:
         showToast(e->b ? L"Windows Firewall now allows Mirrorly" : L"Firewall rules could not be changed");
         break;

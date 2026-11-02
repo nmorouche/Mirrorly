@@ -6,17 +6,18 @@
 #include <cmath>
 
 namespace {
-const int kRate = 44100;
-const int kBufFrames = 441 * 2;   // 20 ms per waveOut buffer
-const int kNumBufs = 5;           // ~100 ms queued in the device
-const size_t kPrime = 44100 * 2 * 60 / 1000;   // start playback once 60 ms are buffered
-const size_t kMaxQueue = 44100 * 2 * 300 / 1000;  // above 300 ms, drop old audio
-const size_t kTrimTo = 44100 * 2 * 100 / 1000;
+const int kNumBufs = 5;  // ~100 ms queued in the device (20 ms per buffer)
 }
 
-bool AudioOut::start() {
-    if (running_) return true;
-    ring_.assign(kRate * 2 * 2, 0);  // 2 s of stereo samples
+bool AudioOut::start(int rate) {
+    if (running_ && rate == rate_) return true;
+    stop();
+    std::lock_guard<std::mutex> lk(m_);
+    rate_ = rate;
+    prime_ = (size_t)rate * 2 * 60 / 1000;      // start playback once 60 ms are buffered
+    maxQueue_ = (size_t)rate * 2 * 300 / 1000;  // above 300 ms, drop old audio
+    trimTo_ = (size_t)rate * 2 * 100 / 1000;
+    ring_.assign((size_t)rate * 2 * 2, 0);      // 2 s of stereo samples
     rd_ = wr_ = count_ = 0;
     primed_ = false;
     running_ = true;
@@ -46,8 +47,8 @@ void AudioOut::push(const int16_t* pcm, int frames) {
         if (count_ < cap) count_++;
         else rd_ = (rd_ + 1) % cap;
     }
-    if (count_ > kMaxQueue) {  // sender is ahead of the sound card: catch up
-        size_t drop = count_ - kTrimTo;
+    if (count_ > maxQueue_) {  // sender is ahead of the sound card: catch up
+        size_t drop = count_ - trimTo_;
         drop -= drop % 2;
         rd_ = (rd_ + drop) % cap;
         count_ -= drop;
@@ -68,10 +69,11 @@ void AudioOut::loop() {
     WAVEFORMATEX fmt{};
     fmt.wFormatTag = WAVE_FORMAT_PCM;
     fmt.nChannels = 2;
-    fmt.nSamplesPerSec = kRate;
+    const int kBufFrames = rate_ / 50;  // 20 ms
+    fmt.nSamplesPerSec = rate_;
     fmt.wBitsPerSample = 16;
     fmt.nBlockAlign = 4;
-    fmt.nAvgBytesPerSec = kRate * 4;
+    fmt.nAvgBytesPerSec = rate_ * 4;
     HWAVEOUT wo = nullptr;
     if (waveOutOpen(&wo, WAVE_MAPPER, &fmt, (DWORD_PTR)ev, 0, CALLBACK_EVENT) != MMSYSERR_NOERROR) {
         CloseHandle(ev);
@@ -96,7 +98,7 @@ void AudioOut::loop() {
             int peak = 0;
             {
                 std::lock_guard<std::mutex> lk(m_);
-                if (!primed_ && count_ >= kPrime) primed_ = true;
+                if (!primed_ && count_ >= prime_) primed_ = true;
                 size_t avail = primed_ ? std::min(count_, want) : 0;
                 size_t cap = ring_.size();
                 for (size_t k = 0; k < avail; k++) {

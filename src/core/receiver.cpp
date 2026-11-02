@@ -752,6 +752,12 @@ void Receiver::acceptLoop() {
 }
 
 void Receiver::activateSession(std::shared_ptr<Session> s, Connection* owner) {
+    std::function<void()> preempt;
+    {
+        std::lock_guard<std::mutex> lk(hookMutex_);
+        preempt = preempt_;
+    }
+    if (preempt) preempt();
     std::shared_ptr<Session> old;
     Connection* oldOwner = nullptr;
     {

@@ -84,6 +84,49 @@ int sock_wait_readable(sock_t s, int timeout_ms) {
     return r > 0 ? 1 : 0;
 }
 
+sock_t tcp_connect(uint32_t ip_be, uint16_t port, int timeout_ms) {
+    sock_t s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == MN_INVALID_SOCKET) return s;
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_port = htons(port);
+    a.sin_addr.s_addr = ip_be;
+#ifdef _WIN32
+    u_long nb = 1;
+    ioctlsocket(s, FIONBIO, &nb);
+#else
+    int fl = fcntl(s, F_GETFL, 0);
+    fcntl(s, F_SETFL, fl | O_NONBLOCK);
+#endif
+    int r = connect(s, (const sockaddr*)&a, sizeof(a));
+    bool ok = r == 0;
+    if (!ok) {
+        fd_set wf, ef;
+        FD_ZERO(&wf);
+        FD_ZERO(&ef);
+        FD_SET(s, &wf);
+        FD_SET(s, &ef);
+        timeval tv{timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+        if (select((int)s + 1, nullptr, &wf, &ef, &tv) > 0 && FD_ISSET(s, &wf)) {
+            int err = 0;
+            socklen_t el = sizeof(err);
+            getsockopt(s, SOL_SOCKET, SO_ERROR, (char*)&err, &el);
+            ok = err == 0;
+        }
+    }
+#ifdef _WIN32
+    nb = 0;
+    ioctlsocket(s, FIONBIO, &nb);
+#else
+    fcntl(s, F_SETFL, fl);
+#endif
+    if (!ok) {
+        sock_close(s);
+        return MN_INVALID_SOCKET;
+    }
+    return s;
+}
+
 bool sock_recv_all(sock_t s, uint8_t* buf, size_t len, const volatile bool* running) {
     size_t got = 0;
     while (got < len) {
@@ -188,6 +231,8 @@ std::vector<NetInterface> list_ipv4_interfaces() {
             char nm[256];
             WideCharToMultiByte(CP_UTF8, 0, ad->FriendlyName, -1, nm, sizeof(nm), nullptr, nullptr);
             ni.name = nm;
+            WideCharToMultiByte(CP_UTF8, 0, ad->Description, -1, nm, sizeof(nm), nullptr, nullptr);
+            ni.description = nm;
             ni.addr = sa->sin_addr.s_addr;
             ULONG mask = 0;
             ConvertLengthToIpv4Mask(ua->OnLinkPrefixLength, &mask);

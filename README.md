@@ -5,7 +5,8 @@
 <h1 align="center">Mirrorly</h1>
 
 <p align="center">
-  An AirPlay receiver for Windows. Mirror an iPhone or iPad screen to your PC, with sound.
+  Mirror an iPhone, iPad or Android phone to your Windows PC, with sound.<br>
+  Over Wi-Fi with AirPlay, or with a USB cable.
 </p>
 
 ---
@@ -13,9 +14,11 @@
 ## Features
 
 - **Screen mirroring** from iPhone and iPad, up to 4K and 60 fps
+- **Android phones over USB**: plug the phone in and it mirrors, screen and sound
+- **iPhone over USB**, through Personal Hotspot (same Screen Mirroring flow, no Wi-Fi needed)
 - **Audio**, both while mirroring and for music-only AirPlay (ALAC, AAC, AAC-ELD)
 - **Now Playing** view with artwork, title, artist and progress when streaming music
-- **Portable**: a single `Mirrorly.exe` (about 4.5 MB) with no installer, runtime, Bonjour or iTunes needed
+- **Portable**: a single `Mirrorly.exe` (about 14 MB) with no installer, runtime, Bonjour or iTunes needed
 - **Themes**, picked at the bottom of Settings (the window and taskbar icon change with them):
   - **Default**: clean and quiet, follows Windows light/dark mode, frosted controls over the video
   - **Acid poster**: concrete-grey paper, giant acid-lime type, a cobalt block with pixel lettering, a halftone object and a live waveform
@@ -31,6 +34,29 @@ Tested with an iPhone on iOS 27.2 and Windows 11.
 4. On the iPhone, open **Control Center → Screen Mirroring** and choose your PC.
 
 To stream music only, pick the PC from the AirPlay menu in Control Center or in any app.
+
+## Mirroring with a cable
+
+### Android
+
+1. On the phone, turn on **USB debugging** (once):
+   **Settings → About phone →** tap **Build number** 7 times, then **Settings → System → Developer options → USB debugging**.
+   The menu names vary a little between brands.
+2. Plug the phone into the PC. The first time, the phone asks *Allow USB debugging?*: tap **Allow**
+   (tick *Always allow from this computer* so it doesn't ask again).
+3. Mirroring starts on its own. Close it with ✕; click **Mirror** on the home screen to start again.
+
+Sound comes through on Android 11 and later (the phone's own speaker goes quiet while mirroring).
+Turn it off in **Settings → Cable (USB) → Android phones** if you don't want phones to mirror when plugged in.
+
+### iPhone
+
+iOS has no public way for a PC to receive the screen over USB, but AirPlay works over the cable:
+
+1. On the iPhone, turn on **Settings → Personal Hotspot → Allow Others to Join**.
+2. Plug it into the PC. Windows needs Apple's USB driver, which comes with the
+   [Apple Devices](https://apps.microsoft.com/detail/9np83lwlpz9k) app (or iTunes).
+3. Mirrorly shows *iPhone connected by cable*. Use **Control Center → Screen Mirroring** as usual.
 
 ## Controls
 
@@ -50,12 +76,13 @@ Click the gear icon:
 | Setting | Description |
 | --- | --- |
 | Name | How the PC appears on your devices |
-| Resolution | 720p, 1080p, 1440p or 4K: the highest quality the iPhone will send |
+| Resolution | 720p, 1080p, 1440p or 4K: the highest quality the phone will send |
 | Frame rate | 30 or 60 fps |
 | Full screen on start | Go full screen as soon as mirroring begins |
-| Play audio | Play the iPhone's sound on the PC |
-| Theme | Default or Acid poster; more can be added (see below) |
+| Play sound | Play the phone's sound on the PC |
 | Windows Firewall | Lets Mirrorly through the firewall on all network types (asks for admin approval) |
+| Cable (USB): Android phones | Mirror Android phones as soon as they are plugged in |
+| Theme | Default or Acid poster; more can be added (see below) |
 
 Settings are saved in `%APPDATA%\Mirrorly\settings.ini`.
 
@@ -66,7 +93,10 @@ Settings are saved in `%APPDATA%\Mirrorly\settings.ini`.
 | The PC doesn't appear on the iPhone | Use **Settings → Windows Firewall → Allow**, and check both devices are on the same network. Guest Wi-Fi, client isolation and VPNs block AirPlay. |
 | "Network discovery is blocked" | Another program has UDP port 5353 locked. Close other AirPlay receivers and restart Mirrorly. |
 | Two receivers show up | Close any other AirPlay receiver app running on the PC. |
-| Picture but no sound | Check **Settings → Play audio**, the mute button, the iPhone volume and the Windows output device. |
+| Picture but no sound | Check **Settings → Play sound**, the mute button, the phone volume and the Windows output device. |
+| Android phone plugged in, nothing happens | Check that USB debugging is on and the cable carries data (not charge-only). Some phones need their maker's USB driver on Windows (e.g. Samsung USB Driver). |
+| Android: "Tap Allow on your phone" | Unlock the phone and accept the *Allow USB debugging?* prompt. |
+| Android mirrors without sound | Sound needs Android 11 or later. |
 
 Mirrorly writes a `Mirrorly.log` next to the exe (or in `%APPDATA%\Mirrorly`). Check it first when something goes wrong.
 
@@ -79,8 +109,15 @@ iPhone ──mDNS──▶ discovery        (_airplay._tcp, _raop._tcp)
        ──TCP───▶ screen stream    (H.264, AES-128-CTR)
        ──UDP───▶ audio stream     (RTP, AAC-ELD / ALAC, AES-128-CBC)
                                     │
+Android ─USB─▶ adb ─▶ scrcpy server on the phone (H.264 + PCM over an adb tunnel)
+                                    │
                          FFmpeg decode → Direct2D (video) / waveOut (audio)
 ```
+
+For Android, Mirrorly talks to the adb server directly (host protocol over TCP), pushes the
+[scrcpy](https://github.com/Genymobile/scrcpy) server to the phone and reads its streams. If an adb server is
+already running (Android Studio, for example) it is reused; otherwise Mirrorly starts the adb bundled in the exe
+(unpacked to `%LOCALAPPDATA%\Mirrorly`) and stops it again on exit.
 
 ## Project layout
 
@@ -89,6 +126,8 @@ src/core/          AirPlay engine (portable C++17, also builds on Linux)
   mdns.*             mDNS / DNS-SD responder
   receiver.*         RTSP server: /info, pairing, FairPlay, SETUP, TEARDOWN
   streams.*          mirroring video, RTP audio, NTP timing
+  adb.*              adb host-protocol client (devices, push, forward, shell)
+  android_mirror.*   wired Android mirroring (scrcpy server streams)
   plist.*            binary property-list reader/writer
   crypto.*           SHA-512, AES, Ed25519, X25519
   native_media.c     FairPlay + FFmpeg decoding
@@ -98,7 +137,8 @@ src/app/           Windows app (Win32, Direct2D, DirectWrite, waveOut)
   theme_default.cpp  Default theme
   theme_poster.cpp   Acid poster theme
   themes.cpp         theme registry
-tests/             fake_iphone.cpp: simulated iPhone for end-to-end tests
+  android_usb.cpp    bundled adb, iPhone-over-USB detection
+tests/             simulated iPhone and Android phone for end-to-end tests
 third_party/       playfair, Monocypher, tiny-AES
 res/               icon, manifest, resources
 ```
@@ -112,6 +152,7 @@ The build runs on Linux and cross-compiles for Windows with MinGW-w64.
 sudo apt install build-essential nasm git gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
 
 ./build_ffmpeg.sh win        # minimal static FFmpeg 7.1 for Windows
+./fetch_android_deps.sh      # adb + scrcpy server (checksums verified)
 ./build_windows.sh           # → out/win/Mirrorly.exe
 ```
 
@@ -152,6 +193,15 @@ ffmpeg -f lavfi -i testsrc2=size=1014x1440:rate=30 -frames:v 10 -c:v libx264 -bf
 ./out/linux/video_edges odd.h264
 ```
 
+`tests/android_usb.cpp` runs the USB engine against a fake adb server with a fake phone behind it
+(plugging in, *Allow USB debugging*, mirroring, closing, re-plugging, phones without sound):
+
+```bash
+./out/linux/android_usb /path/to/testmedia/video.h264
+```
+
+`tests/fake_adb.cpp` is the same fake phone as a separate program, to try the app's USB screens without a phone.
+
 The test media folder for `fake_iphone` needs these files:
 - `video.h264`: Annex-B H.264
 - `alac_packets.bin` or `aac_packets.bin`: audio packets, each preceded by its 32-bit little-endian length
@@ -159,6 +209,8 @@ The test media folder for `fake_iphone` needs these files:
 ## Credits
 
 - [UxPlay](https://github.com/FDH2/UxPlay) and [RPiPlay](https://github.com/FD-/RPiPlay): reference for the AirPlay protocol
+- [scrcpy](https://github.com/Genymobile/scrcpy) (Apache 2.0): the server that runs on Android phones
+- [Android platform tools](https://developer.android.com/tools/releases/platform-tools) (Apache 2.0): adb
 - playfair (from shairplay): FairPlay handshake
 - [FFmpeg](https://ffmpeg.org): H.264 and audio decoding
 - [Monocypher](https://monocypher.org) and [tiny-AES-c](https://github.com/kokke/tiny-AES-c): cryptography
@@ -167,4 +219,5 @@ The test media folder for `fake_iphone` needs these files:
 
 Mirrorly is released under the [GNU General Public License v3.0](LICENSE.md), because it includes GPL-3 FairPlay code.
 
-*AirPlay, iPhone and iPad are trademarks of Apple Inc. This project is not affiliated with or endorsed by Apple.*
+*AirPlay, iPhone and iPad are trademarks of Apple Inc. Android is a trademark of Google LLC.
+This project is not affiliated with or endorsed by Apple or Google.*

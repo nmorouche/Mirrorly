@@ -117,6 +117,30 @@ public:
         a.strokeRect(m, INK, 1.0f, 0, 1.5f);
         a.text(status, D2D1::RectF(bx + 24, sy - 14, W - 40, sy + 14), a.fmt(19, DWRITE_FONT_WEIGHT_SEMI_BOLD), INK);
 
+        // cable (USB) line under the status
+        std::wstring action;
+        bool attention = false;
+        std::wstring wired = a.wiredHint(action, attention);
+        if (!wired.empty()) {
+            float wy = sy + 34;
+            IDWriteTextFormat* wf = a.fmt(14);
+            a.fillRect(D2D1::RectF(bx, wy - 9, bx + 34, wy + 9), attention ? ALERT : INK);
+            a.pixelText(L"USB", bx + 4, wy - 3.5f, 1.0f, attention ? INK : ACID);
+            float tw = std::min(a.textWidth(wired, wf), W - bx - 200);
+            a.text(wired, D2D1::RectF(bx + 44, wy - 11, bx + 44 + tw + 2, wy + 11), wf, INK);
+            if (!action.empty()) {
+                std::wstring label = action;
+                for (auto& c : label) c = towupper(c);
+                float lw = a.pixelTextWidth(label, 1.5f);
+                D2D1_RECT_F br = D2D1::RectF(bx + 44 + tw + 14, wy - 12, bx + 44 + tw + 14 + lw + 20, wy + 12);
+                bool hov = a.hover_ == H_USB_ACTION;
+                a.fillRect(br, hov ? COBALT : INK);
+                a.pixelText(label, br.left + 10, wy - 5.25f, 1.5f, hov ? WHITE : ACID);
+                a.addHit(H_USB_ACTION, br);
+            }
+            sy = wy;
+        }
+
         float stY = std::max(sy + 54, H - 76);
         float x = bx;
         const std::wstring steps[3] = {L"Open Control Center", L"Tap Screen Mirroring", L"Choose " + name};

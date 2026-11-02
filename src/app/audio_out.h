@@ -1,4 +1,4 @@
-// Mirrorly - low-latency PCM output (44.1 kHz, 16-bit stereo) via waveOut
+// Mirrorly - low-latency PCM output (16-bit stereo, 44.1 or 48 kHz) via waveOut
 #pragma once
 #include <windows.h>
 
@@ -11,7 +11,9 @@
 class AudioOut {
 public:
     ~AudioOut() { stop(); }
-    bool start();
+    // Starts playback at the given sample rate (restarts if it changes).
+    bool start(int rate = 44100);
+    int rate() const { return rate_; }
     void stop();
     bool running() const { return running_; }
     void push(const int16_t* interleaved, int frames);
@@ -24,6 +26,8 @@ public:
 private:
     void loop();
     std::atomic<bool> running_{false};
+    int rate_ = 44100;
+    size_t prime_ = 0, maxQueue_ = 0, trimTo_ = 0;  // in samples
     std::thread thread_;
     std::mutex m_;
     std::vector<int16_t> ring_;

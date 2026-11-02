@@ -144,7 +144,28 @@ public:
             a.text(steps[i], D2D1::RectF(card.left + 50, ry - 11, card.right - 16, ry + 11), a.fmt(14), p.text);
             if (i > 0) a.line(card.left + 50, card.top + rowH * i, card.right, card.top + rowH * i, p.sep, p.sepA, 1.0f);
         }
-        y = card.bottom + 24;
+        y = card.bottom + 26;
+
+        // cable (USB) line
+        std::wstring action;
+        bool attention = false;
+        std::wstring wired = a.wiredHint(action, attention);
+        if (!wired.empty()) {
+            IDWriteTextFormat* wf = a.fmt(13);
+            IDWriteTextFormat* af = a.fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+            float tw = std::min(a.textWidth(wired, wf), W - 140), aw = action.empty() ? 0 : a.textWidth(action, af) + 14;
+            float x = cx - (22 + tw + aw) / 2;
+            a.icon(G_USB, x + 8, y, 15, attention ? p.orange : p.text2);
+            a.text(wired, D2D1::RectF(x + 22, y - 10, x + 22 + tw + 2, y + 10), wf, attention ? p.text : p.text2);
+            if (!action.empty()) {
+                D2D1_RECT_F ar = D2D1::RectF(x + 22 + tw + 14, y - 10, x + 22 + tw + aw + 2, y + 10);
+                bool hov = a.hover_ == H_USB_ACTION;
+                a.text(action, ar, af, hov ? p.accentHover : p.accent);
+                if (hov) a.line(ar.left, ar.bottom - 1, ar.right - 2, ar.bottom - 1, p.accentHover, 1.0f, 1.0f);
+                a.addHit(H_USB_ACTION, D2D1::RectF(ar.left - 6, ar.top - 4, ar.right + 6, ar.bottom + 4));
+            }
+            y += 34;
+        }
 
         // footer
         std::wstring ip = a.primaryIp();
