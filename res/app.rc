@@ -1,9 +1,15 @@
 #include <windows.h>
+#ifndef VER_STR
+#define VER_STR "1.0.0"
+#endif
+#ifndef VER_NUM
+#define VER_NUM 1,0,0,0
+#endif
 1 ICON "mirrorly.ico"
 1 RT_MANIFEST "app.manifest"
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 1,0,0,0
-PRODUCTVERSION 1,0,0,0
+FILEVERSION VER_NUM
+PRODUCTVERSION VER_NUM
 FILEOS VOS_NT_WINDOWS32
 FILETYPE VFT_APP
 BEGIN
@@ -13,9 +19,9 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "Mirrorly"
       VALUE "FileDescription", "Mirrorly - AirPlay receiver for Windows"
-      VALUE "FileVersion", "1.0.0"
+      VALUE "FileVersion", VER_STR
       VALUE "ProductName", "Mirrorly"
-      VALUE "ProductVersion", "1.0.0"
+      VALUE "ProductVersion", VER_STR
       VALUE "OriginalFilename", "Mirrorly.exe"
       VALUE "LegalCopyright", "GPL-3.0"
     END

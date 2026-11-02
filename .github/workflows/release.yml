@@ -1,0 +1,71 @@
+name: Build & Release
+
+# Push a tag like v1.0.0 to build Mirrorly.exe and publish a GitHub Release with it.
+# It can also be started by hand (Actions tab → Build & Release → Run workflow) to just build the exe.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Install the MinGW-w64 toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+
+      - name: Restore cached FFmpeg
+        id: ffmpeg-cache
+        uses: actions/cache@v4
+        with:
+          path: deps/ffmpeg-win/install
+          key: ffmpeg-n7.1-win64-${{ hashFiles('build_ffmpeg.sh') }}
+
+      - name: Build FFmpeg (minimal, static)
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: ./build_ffmpeg.sh win
+
+      - name: Build Mirrorly.exe
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="0.0.0"; fi
+          VERSION="$VERSION" ./build_windows.sh
+          mkdir -p dist
+          cp out/win/Mirrorly.exe dist/Mirrorly.exe
+          (cd dist && sha256sum Mirrorly.exe > Mirrorly.exe.sha256)
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mirrorly-win64
+          path: dist/
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<NOTES
+          ## Mirrorly ${GITHUB_REF_NAME}
+
+          AirPlay receiver for Windows: mirror your iPhone or iPad screen to your PC, with sound.
+
+          ### Download
+          **Mirrorly.exe** below is portable: download it and run it. Nothing to install.
+
+          ### First run
+          1. When Windows Defender Firewall asks, click **Allow** (tick *Private* and *Public*).
+          2. Connect the iPhone and the PC to the same network.
+          3. On the iPhone: **Control Center → Screen Mirroring →** choose your PC.
+
+          Windows 10/11, 64-bit. SHA-256 checksum: \`Mirrorly.exe.sha256\`.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" dist/Mirrorly.exe dist/Mirrorly.exe.sha256 \
+            --title "Mirrorly ${GITHUB_REF_NAME}" --notes-file notes.md

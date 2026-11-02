@@ -23,7 +23,7 @@ Tested with an iPhone on iOS 27.2 and Windows 11.
 
 ## Getting started
 
-1. Download `Mirrorly.exe` and run it.
+1. Download `Mirrorly.exe` from the [latest release](../../releases/latest) and run it.
 2. When Windows Defender Firewall asks, click **Allow**. Tick both *Private* and *Public* networks.
 3. Connect the iPhone and the PC to the **same network**.
 4. On the iPhone, open **Control Center → Screen Mirroring** and choose your PC.
@@ -106,6 +106,18 @@ sudo apt install build-essential nasm git gcc-mingw-w64-x86-64 g++-mingw-w64-x86
 ./build_ffmpeg.sh win        # minimal static FFmpeg 7.1 for Windows
 ./build_windows.sh           # → out/win/Mirrorly.exe
 ```
+
+### Releases
+
+Pushing a version tag builds `Mirrorly.exe` on GitHub Actions and publishes it as a GitHub Release:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The version number in the tag is written into the app's About text and its Windows file properties.
+To build locally with a version: `VERSION=1.0.0 ./build_windows.sh`.
 
 ### Tests
 

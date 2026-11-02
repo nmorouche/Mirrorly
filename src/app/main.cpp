@@ -38,7 +38,10 @@
 #define WM_APP_FRAME (WM_APP + 2)
 
 static const wchar_t* kAppName = L"Mirrorly";
-static const wchar_t* kVersion = L"1.0.0";
+#ifndef MIRRORLY_VERSION
+#define MIRRORLY_VERSION "1.0.0"
+#endif
+static const wchar_t* kVersion = L"" MIRRORLY_VERSION;
 
 template <class T> static void SafeRelease(T*& p) {
     if (p) { p->Release(); p = nullptr; }
