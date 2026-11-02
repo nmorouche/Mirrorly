@@ -6,6 +6,7 @@
 #define VER_NUM 1,0,0,0
 #endif
 1 ICON "mirrorly.ico"
+2 ICON "mirrorly-acid.ico"
 1 RT_MANIFEST "app.manifest"
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION VER_NUM

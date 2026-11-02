@@ -9,6 +9,7 @@ struct Settings {
     int fps = 60;              // 30 or 60
     bool audio = true;
     bool autoFullscreen = false;
+    std::wstring theme = L"default";  // id of the selected theme
     uint8_t seed[32] = {0};
     uint8_t deviceId[6] = {0};
     std::string pi;

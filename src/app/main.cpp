@@ -63,10 +63,14 @@ bool App::init(HINSTANCE inst, int show) {
     IDWriteFontCollection* fc = nullptr;
     if (SUCCEEDED(dw_->GetSystemFontCollection(&fc, FALSE)) && fc) {
         UINT32 idx;
-        BOOL exists = FALSE;
-        if (SUCCEEDED(fc->FindFamilyName(L"Bahnschrift", &idx, &exists)) && exists) uiFont_ = L"Bahnschrift";
-        exists = FALSE;
-        if (SUCCEEDED(fc->FindFamilyName(L"Segoe Fluent Icons", &idx, &exists)) && exists) iconFont_ = L"Segoe Fluent Icons";
+        auto has = [&](const wchar_t* fam) {
+            BOOL exists = FALSE;
+            return SUCCEEDED(fc->FindFamilyName(fam, &idx, &exists)) && exists;
+        };
+        if (has(L"Bahnschrift")) bahnschrift_ = L"Bahnschrift";
+        if (has(L"Segoe UI Variable Text")) segoeText_ = L"Segoe UI Variable Text";
+        if (has(L"Segoe UI Variable Display")) segoeDisplay_ = L"Segoe UI Variable Display";
+        if (has(L"Segoe Fluent Icons")) iconFont_ = L"Segoe Fluent Icons";
         fc->Release();
     }
 
@@ -76,6 +80,8 @@ bool App::init(HINSTANCE inst, int show) {
 
     settings_.load();
     audioEnabled_ = settings_.audio;
+    theme_ = findTheme(settings_.theme);
+    theme_->onActivate(*this);
 
     WNDCLASSEXW wc{sizeof(wc)};
     wc.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
@@ -85,7 +91,8 @@ bool App::init(HINSTANCE inst, int show) {
     wc.hIcon = LoadIconW(inst, MAKEINTRESOURCEW(1));
     wc.hIconSm = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON, 16, 16, 0);
     wc.lpszClassName = L"MirrorlyWindow";
-    wc.hbrBackground = CreateSolidBrush(RGB(0xC4, 0xC7, 0xBD));
+    uint32_t wcol = theme_->windowColor(*this);
+    wc.hbrBackground = CreateSolidBrush(RGB((wcol >> 16) & 255, (wcol >> 8) & 255, wcol & 255));
     RegisterClassExW(&wc);
 
     UINT sysDpi = app_get_dpi(nullptr);
@@ -94,18 +101,55 @@ bool App::init(HINSTANCE inst, int show) {
                             CW_USEDEFAULT, w, h, nullptr, nullptr, inst, this);
     if (!hwnd_) return false;
 
-    // light title bar that blends into the paper background (Windows 11 caption colours)
-    BOOL dark = FALSE;
-    DwmSetWindowAttribute(hwnd_, 20, &dark, sizeof(dark));
-    COLORREF cap = RGB(0xC4, 0xC7, 0xBD), capText = RGB(0, 0, 0);
-    DwmSetWindowAttribute(hwnd_, 35, &cap, sizeof(cap));
-    DwmSetWindowAttribute(hwnd_, 36, &capText, sizeof(capText));
+    applyTheme(false);
 
     ShowWindow(hwnd_, show);
     UpdateWindow(hwnd_);
     SetTimer(hwnd_, 1, 33, nullptr);
     startReceiver();
     return true;
+}
+
+// Windows "app mode" light/dark setting
+void App::readSystemTheme() {
+    DWORD v = 1, sz = sizeof(v);
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", L"AppsUseLightTheme",
+                     RRF_RT_REG_DWORD, nullptr, &v, &sz) == ERROR_SUCCESS)
+        systemDark_ = v == 0;
+    else
+        systemDark_ = false;
+}
+
+// Applies the current theme to the window: title bar colours, taskbar/window icon, name field.
+void App::applyTheme(bool announce) {
+    theme_->onActivate(*this);
+    if (!hwnd_) return;
+    BOOL dark = theme_->darkTitleBar(*this) ? TRUE : FALSE;
+    DwmSetWindowAttribute(hwnd_, 20, &dark, sizeof(dark));
+    uint32_t c = theme_->windowColor(*this);
+    COLORREF cap = RGB((c >> 16) & 255, (c >> 8) & 255, c & 255);
+    COLORREF capText = dark ? RGB(0xF5, 0xF5, 0xF7) : RGB(0, 0, 0);
+    DwmSetWindowAttribute(hwnd_, 35, &cap, sizeof(cap));
+    DwmSetWindowAttribute(hwnd_, 36, &capText, sizeof(capText));
+
+    int res = theme_->iconResource();
+    HICON big = (HICON)LoadImageW(inst_, MAKEINTRESOURCEW(res), IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0);
+    HICON small = (HICON)LoadImageW(inst_, MAKEINTRESOURCEW(res), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
+    if (big) SendMessageW(hwnd_, WM_SETICON, ICON_BIG, (LPARAM)big);
+    if (small) SendMessageW(hwnd_, WM_SETICON, ICON_SMALL, (LPARAM)small);
+
+    uint32_t eb = theme_->editBackground(*this);
+    if (editBrush_) DeleteObject(editBrush_);
+    editBrush_ = CreateSolidBrush(RGB((eb >> 16) & 255, (eb >> 8) & 255, eb & 255));
+    if (editFont_) {
+        DeleteObject(editFont_);
+        editFont_ = nullptr;
+    }
+    editRect_ = D2D1::RectF();
+    editVisible_ = false;
+    if (edit_) ShowWindow(edit_, SW_HIDE);
+    if (announce) showToast(std::wstring(L"Theme changed to ") + theme_->name());
+    InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 void App::startReceiver() {
@@ -180,7 +224,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
                                 (HMENU)100, inst_, nullptr);
         SendMessageW(edit_, EM_LIMITTEXT, 48, 0);
         editOrigProc_ = (WNDPROC)SetWindowLongPtrW(edit_, GWLP_WNDPROC, (LONG_PTR)EditProc);
-        editBrush_ = CreateSolidBrush(RGB(0xC4, 0xC7, 0xBD));
+        editBrush_ = CreateSolidBrush(RGB(0xFF, 0xFF, 0xFF));
         return 0;
     }
     case WM_SIZE:
@@ -302,10 +346,26 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         return 0;
     case WM_CTLCOLOREDIT: {
         HDC dc = (HDC)w;
-        SetTextColor(dc, RGB(0, 0, 0));
-        SetBkColor(dc, RGB(0xC4, 0xC7, 0xBD));
+        uint32_t tc = theme_->editText(*this), bc = theme_->editBackground(*this);
+        SetTextColor(dc, RGB((tc >> 16) & 255, (tc >> 8) & 255, tc & 255));
+        SetBkColor(dc, RGB((bc >> 16) & 255, (bc >> 8) & 255, bc & 255));
         return (LRESULT)editBrush_;
     }
+    case WM_SETTINGCHANGE:
+        if (l && wcscmp((const wchar_t*)l, L"ImmersiveColorSet") == 0) applyTheme(false);
+        break;
+    case WM_MOUSEWHEEL:
+    case WM_MOUSEHWHEEL:
+        if (settingsOpen_) {
+            float d = GET_WHEEL_DELTA_WPARAM(w) / 120.0f;
+            bool overStrip = hover_ == H_THEME_STRIP || hover_ >= H_THEME;
+            if (m == WM_MOUSEHWHEEL || (overStrip && themeStripMax_ > 0) || (GetKeyState(VK_SHIFT) & 0x8000))
+                themeScroll_ -= (m == WM_MOUSEHWHEEL ? -d : d) * 80;
+            else
+                settingsScroll_ -= d * 56;
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+        return 0;
     case WM_DESTROY:
         KillTimer(hwnd_, 1);
         discardDeviceResources();
@@ -319,8 +379,21 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
 
 void App::click(int hit) {
     switch (hit) {
+    default:
+        if (hit >= H_THEME && hit < H_THEME + (int)allThemes().size()) {
+            Theme* t = allThemes()[hit - H_THEME];
+            if (t != theme_) {
+                commitName();
+                theme_ = t;
+                settings_.theme = t->id();
+                settings_.save();
+                applyTheme(true);
+            }
+        }
+        break;
     case H_SETTINGS:
         settingsOpen_ = true;
+        settingsScroll_ = 0;
         SetWindowTextW(edit_, settings_.name.c_str());
         break;
     case H_BACK:

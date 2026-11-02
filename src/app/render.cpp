@@ -1,11 +1,9 @@
-// Mirrorly - rendering. Visual identity: "acid poster".
-//
-//  - concrete-grey paper with film grain
-//  - giant acid-lime type bleeding off the canvas
-//  - an electric cobalt block carrying pixel lettering (our own 5x7 dot-matrix face)
-//  - a gunmetal halftone object with lime cracks; it turns cobalt while a device connects
-//  - small black technical labels
+// Mirrorly - rendering: device resources, the drawing toolkit shared by all themes,
+// the Settings layout (theme-styled), the theme picker and the mirroring base layer.
+// Each theme's look lives in theme_*.cpp.
 #include "app.h"
+
+#include <d2d1effects.h>
 
 #define _USE_MATH_DEFINES
 #include <algorithm>
@@ -16,7 +14,6 @@
 #include "log.h"
 #include "platform.h"
 
-using namespace tok;
 
 // ================================================================== pixel font (5x7)
 
@@ -160,7 +157,7 @@ bool App::createDeviceResources() {
     rt_->SetDpi((float)dpi_, (float)dpi_);
     rt_->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
     rt_->QueryInterface(__uuidof(ID2D1DeviceContext), (void**)&dc_);
-    rt_->CreateSolidColorBrush(rgb(INK), &brush_);
+    rt_->CreateSolidColorBrush(rgb(0x000000), &brush_);
 
     // film grain: a small tile of black and white specks, repeated over the canvas
     const int N = 192;
@@ -200,12 +197,15 @@ double App::animTime() const {
 // ================================================================== primitives
 
 IDWriteTextFormat* App::fmt(float size, DWRITE_FONT_WEIGHT w, DWRITE_TEXT_ALIGNMENT a, FontRole role) {
-    wchar_t key[96];
-    swprintf(key, 96, L"%d|%d|%d|%d", (int)(size * 10), (int)w, (int)a, (int)role);
+    const wchar_t* family = iconFont_.c_str();
+    if (role == F_UI) family = theme_ ? theme_->uiFont(*this, false) : segoeText_.c_str();
+    else if (role == F_UI_DISPLAY) family = theme_ ? theme_->uiFont(*this, true) : segoeDisplay_.c_str();
+    else if (role == F_CONDENSED) family = bahnschrift_.c_str();
+    wchar_t key[160];
+    swprintf(key, 160, L"%d|%d|%d|%d|%ls", (int)(size * 10), (int)w, (int)a, (int)role, family);
     auto it = formats_.find(key);
     if (it != formats_.end()) return it->second;
     IDWriteTextFormat* f = nullptr;
-    const wchar_t* family = role == F_ICON ? iconFont_.c_str() : uiFont_.c_str();
     DWRITE_FONT_STRETCH stretch = role == F_CONDENSED ? DWRITE_FONT_STRETCH_CONDENSED : DWRITE_FONT_STRETCH_NORMAL;
     dw_->CreateTextFormat(family, nullptr, w, DWRITE_FONT_STYLE_NORMAL, stretch, size, L"en-us", &f);
     if (f) {
@@ -270,63 +270,6 @@ void App::dot(float cx, float cy, float r, uint32_t color, float alpha) {
     rt_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), r, r), brush_);
 }
 
-// Square icon button. On paper: black icon, acid fill on hover. On video: white icon.
-void App::iconButton(int id, wchar_t g, float cx, float cy, float size, float alpha, bool destructive) {
-    float r = size / 2;
-    D2D1_RECT_F rc = D2D1::RectF(cx - r, cy - r, cx + r, cy + r);
-    bool hov = hover_ == id;
-    bool onVideo = mirrorActive_ && !settingsOpen_;
-    uint32_t fg = onVideo ? WHITE : INK;
-    if (hov) {
-        fillRect(rc, destructive ? ALERT : ACID, alpha);
-        fg = destructive ? WHITE : INK;
-    } else if (!onVideo) {
-        strokeRect(rc, INK, 0.9f * alpha);
-    }
-    icon(g, cx, cy, size * 0.40f, fg, alpha);
-    addHit(id, rc);
-}
-
-void App::toggle(int id, bool on, float x, float y) {
-    float w = 48, h = 24;
-    D2D1_RECT_F r = D2D1::RectF(x, y - h / 2, x + w, y + h / 2);
-    if (on) fillRect(r, ACID);
-    else if (hover_ == id) fillRect(r, PAPER2);
-    strokeRect(r, INK, 1.0f, 0, 1.5f);
-    float k = 16;
-    float kx = on ? x + w - 4 - k : x + 4;
-    fillRect(D2D1::RectF(kx, y - k / 2, kx + k, y + k / 2), on ? INK : INK3);
-    addHit(id, D2D1::RectF(x - 6, y - 18, x + w + 6, y + 18));
-}
-
-void App::choices(const std::vector<std::pair<int, std::wstring>>& items, int selected, float right, float cy) {
-    IDWriteTextFormat* f = fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
-    float segW = 62, h = 30;
-    float x = right - segW * items.size();
-    for (size_t i = 0; i < items.size(); i++) {
-        D2D1_RECT_F r = D2D1::RectF(x + segW * i, cy - h / 2, x + segW * (i + 1), cy + h / 2);
-        bool sel = items[i].first == selected;
-        if (sel) fillRect(r, ACID);
-        else if (hover_ == items[i].first) fillRect(r, PAPER2);
-        text(items[i].second, r, f, INK, sel ? 1.0f : 0.75f);
-        addHit(items[i].first, r);
-    }
-    strokeRect(D2D1::RectF(x, cy - h / 2, right, cy + h / 2), INK, 1.0f, 0, 1.5f);
-    for (size_t i = 1; i < items.size(); i++) line(x + segW * i, cy - h / 2, x + segW * i, cy + h / 2, INK, 1.0f, 1.0f);
-}
-
-void App::link(int id, const std::wstring& s, float x, float y, bool alignRight) {
-    IDWriteTextFormat* f = fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    float w = textWidth(s, f);
-    float x0 = alignRight ? x - w : x;
-    D2D1_RECT_F r = D2D1::RectF(x0, y - 11, x0 + w, y + 11);
-    bool hov = hover_ == id;
-    uint32_t c = hov ? COBALT : INK;
-    text(s, r, f, c);
-    line(x0, y + 9, x0 + w, y + 9, c, 1.0f, hov ? 2.0f : 1.0f);
-    addHit(id, D2D1::RectF(r.left - 4, r.top - 4, r.right + 4, r.bottom + 4));
-}
-
 void App::labelColumn(const std::vector<std::wstring>& lines, float right, float top, uint32_t color) {
     IDWriteTextFormat* f = fmt(11.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_TRAILING, F_CONDENSED);
     float y = top;
@@ -335,6 +278,17 @@ void App::labelColumn(const std::vector<std::wstring>& lines, float right, float
         text(l, D2D1::RectF(right - 320, y, right, y + 15), f, color);
         y += 15;
     }
+}
+
+void App::addHit(int id, D2D1_RECT_F r) {
+    if (hitClipOn_) {
+        r.left = std::max(r.left, hitClip_.left);
+        r.top = std::max(r.top, hitClip_.top);
+        r.right = std::min(r.right, hitClip_.right);
+        r.bottom = std::min(r.bottom, hitClip_.bottom);
+        if (r.right <= r.left || r.bottom <= r.top) return;
+    }
+    hits_.push_back({id, r});
 }
 
 int App::hitTest(float x, float y) {
@@ -355,8 +309,8 @@ void App::layoutEdit(bool visible, D2D1_RECT_F r) {
         return;
     }
     if (!editFont_) {
-        editFont_ = CreateFontW(-MulDiv(16, dpi_, 96), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0,
-                                uiFont_.c_str());
+        editFont_ = CreateFontW(-MulDiv(15, dpi_, 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0,
+                                theme_ ? theme_->uiFont(*this, false) : L"Segoe UI");
         SendMessageW(edit_, WM_SETFONT, (WPARAM)editFont_, TRUE);
     }
     if (memcmp(&r, &editRect_, sizeof(r)) != 0 || !editVisible_) {
@@ -454,348 +408,233 @@ void App::drawCracks(float cx, float cy, float r, float W, float H, uint32_t col
     }
 }
 
-// ================================================================== views
+// ================================================================== more toolkit
 
-void App::drawTopBar(float W, bool back, const wchar_t* title) {
-    float y = 34;
-    if (back) {
-        iconButton(H_BACK, G_BACK, 38, y, 36);
-        pixelText(title, 72, y - 10.5f, 3.0f, INK);
-        return;
+void App::softShadow(D2D1_RECT_F r, float radius, float strength, float spread, float dy) {
+    const int steps = 7;
+    for (int k = steps; k >= 1; k--) {
+        float f = (float)k / steps;
+        float e = spread * f;
+        D2D1_RECT_F s = D2D1::RectF(r.left - e, r.top - e + dy * f, r.right + e, r.bottom + e + dy * f);
+        brush_->SetColor(D2D1::ColorF(0, 0, 0, strength / steps * (1.15f - f)));
+        rt_->FillRoundedRectangle(D2D1::RoundedRect(s, radius + e, radius + e), brush_);
     }
-    pixelText(L"MIRRORLY", 26, y - 7, 2.0f, INK);
-    (void)W;
 }
 
-void App::drawHome(float W, float H) {
-    double t = animTime();
-    bool busy = connecting_ || sessionActive_;
-    std::wstring name = settings_.name;
+// Activity indicator: twelve rounded spokes with a rotating fade.
+void App::activitySpinner(float cx, float cy, float r, uint32_t color) {
+    int lead = (int)((mn::now_ms() - startTime_) / 83) % 12;
+    if (reduceMotion_) lead = 0;
+    float w = r * 0.18f;
+    for (int i = 0; i < 12; i++) {
+        float a = (float)(i * 2 * M_PI / 12);
+        int age = (lead - i + 12) % 12;
+        float alpha = std::max(0.2f, 1.0f - age / 9.0f);
+        float sx = sinf(a), sy = -cosf(a);
+        brush_->SetColor(rgb(color, alpha));
+        D2D1_POINT_2F p0 = D2D1::Point2F(cx + sx * r * 0.5f, cy + sy * r * 0.5f);
+        D2D1_POINT_2F p1 = D2D1::Point2F(cx + sx * r, cy + sy * r);
+        ID2D1StrokeStyle* round = nullptr;
+        D2D1_STROKE_STYLE_PROPERTIES sp = D2D1::StrokeStyleProperties(D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND);
+        d2d_->CreateStrokeStyle(sp, nullptr, 0, &round);
+        rt_->DrawLine(p0, p1, brush_, w, round);
+        SafeRelease(round);
+    }
+}
 
-    // 1. giant lime type bleeding off the top-left corner
-    std::wstring giant = name;
-    size_t sp = giant.find(L' ');
-    if (sp != std::wstring::npos && sp >= 2) giant = giant.substr(0, sp);
-    if (giant.size() > 6) giant = giant.substr(0, 6);
-    float gs = H * 0.70f;
-    giantType(giant, -W * 0.035f, -gs * 0.30f, gs, ACID);
-
-    // 2. halftone object with cracks
-    float r = std::min(W * 0.24f, H * 0.30f);
-    float ocx = W * 0.60f, ocy = H * 0.46f;
-    drawCracks(ocx, ocy, r, W, H, ACID, 0.95f);
-    drawHalftoneOrb(ocx, ocy, r, t, busy ? 1.0f : 0.0f, busy ? COBALT : GUN, ACID);
-
-    drawGrain(W, H, 0.55f);
-
-    // 3. top bar
-    drawTopBar(W, false, kAppName);
-    iconButton(H_SETTINGS, G_SETTINGS, W - 40, 34, 36);
-
-    // 4. identity block: the receiver's name in pixel lettering on cobalt
-    float bx = std::max(28.0f, W * 0.075f);
-    float px = std::max(4.0f, std::min(9.0f, H / 72.0f));
-    D2D1_RECT_F blk = pixelBlock(name, bx, ocy - px * 9, std::min(W * 0.62f, W - bx - 28), px, COBALT, WHITE);
-
-    // 5. status line
-    float sy = blk.bottom + 30;
-    std::wstring status;
-    uint32_t mark = ACID;
-    if (busy) {
-        status = L"Connecting to " + from_utf8(client_.name);
-        mark = COBALT;
-    } else if (!rx_.running()) {
-        status = L"AirPlay is stopped. Restart Mirrorly.";
-        mark = ALERT;
-    } else if (!rx_.discoveryOk()) {
-        status = L"Your iPhone can't see this PC. Allow Mirrorly in the firewall.";
-        mark = ALERT;
+// Draws a bitmap with a Gaussian blur into dst (optionally masked to a rounded rect).
+void App::drawBlurred(ID2D1Bitmap* bmp, D2D1_RECT_F dst, float blur, float opacity, D2D1_RECT_F* clip, float clipRadius) {
+    if (!bmp) return;
+    ID2D1RoundedRectangleGeometry* g = nullptr;
+    ID2D1Layer* layer = nullptr;
+    D2D1_RECT_F mask = clip ? *clip : dst;
+    d2d_->CreateRoundedRectangleGeometry(D2D1::RoundedRect(mask, clipRadius, clipRadius), &g);
+    rt_->CreateLayer(&layer);
+    if (g && layer)
+        rt_->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), g, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1::IdentityMatrix(), opacity), layer);
+    ID2D1Effect* fx = nullptr;
+    D2D1_SIZE_F bs = bmp->GetSize();
+    if (dc_ && SUCCEEDED(dc_->CreateEffect(CLSID_D2D1GaussianBlur, &fx)) && fx && bs.width > 0) {
+        float sx = (dst.right - dst.left) / bs.width, sy = (dst.bottom - dst.top) / bs.height;
+        float dev = blur / std::max(0.01f, sx);  // blur is given in DIPs on screen
+        D2D1_BORDER_MODE bm = D2D1_BORDER_MODE_HARD;
+        fx->SetInput(0, bmp, TRUE);
+        fx->SetValue(D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, D2D1_PROPERTY_TYPE_UNKNOWN, (const BYTE*)&dev, sizeof(dev));
+        fx->SetValue(D2D1_GAUSSIANBLUR_PROP_BORDER_MODE, D2D1_PROPERTY_TYPE_UNKNOWN, (const BYTE*)&bm, sizeof(bm));
+        D2D1_MATRIX_3X2_F old;
+        rt_->GetTransform(&old);
+        rt_->SetTransform(D2D1::Matrix3x2F::Scale(sx, sy) * D2D1::Matrix3x2F::Translation(dst.left, dst.top) * old);
+        dc_->DrawImage(fx, D2D1_INTERPOLATION_MODE_LINEAR);
+        rt_->SetTransform(old);
+        fx->Release();
     } else {
-        status = L"Ready for your iPhone";
+        rt_->DrawBitmap(bmp, dst, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
     }
-    bool blink = busy && fmod(t * 2.0, 1.0) > 0.5;
-    D2D1_RECT_F m = D2D1::RectF(bx, sy - 7, bx + 14, sy + 7);
-    if (!blink) fillRect(m, mark);
-    strokeRect(m, INK, 1.0f, 0, 1.5f);
-    text(status, D2D1::RectF(bx + 24, sy - 14, W - 40, sy + 14), fmt(19, DWRITE_FONT_WEIGHT_SEMI_BOLD), INK);
-
-    // 6. the three steps (a real sequence, so they are numbered)
-    float stY = std::max(sy + 54, H - 76);
-    float x = bx;
-    const std::wstring steps[3] = {L"Open Control Center", L"Tap Screen Mirroring", L"Choose " + name};
-    IDWriteTextFormat* stf = fmt(14, DWRITE_FONT_WEIGHT_NORMAL);
-    for (int i = 0; i < 3; i++) {
-        D2D1_RECT_F nb = D2D1::RectF(x, stY - 11, x + 22, stY + 11);
-        fillRect(nb, INK);
-        pixelText(std::to_wstring(i + 1), x + 11 - 4.5f, stY - 5.25f, 1.5f, ACID);
-        float tw = textWidth(steps[i], stf);
-        text(steps[i], D2D1::RectF(x + 30, stY - 12, x + 30 + tw + 2, stY + 12), stf, INK);
-        x += 30 + tw + 26;
-    }
-
-    // 7. technical labels, top right
-    std::wstring ips;
-    for (auto& ni : mn::list_ipv4_interfaces()) {
-        ips = from_utf8(mn::ip_to_string(ni.addr));
-        break;
-    }
-    int rw, rh;
-    settings_.resolutionSize(rw, rh);
-    const wchar_t* resName[] = {L"720P", L"1080P", L"1440P", L"4K"};
-    labelColumn({L"AIRPLAY RECEIVER", ips.empty() ? L"NO NETWORK" : ips, L"PORT " + std::to_wstring(rx_.port()), L"",
-                 std::wstring(resName[std::max(0, std::min(3, settings_.resolution))]) + L" / " + std::to_wstring(settings_.fps) + L" FPS",
-                 settings_.audio ? L"SOUND ON" : L"SOUND OFF", L"", std::wstring(L"V") + kVersion},
-                W - 28, 66, INK);
-
-    // 8. help link, bottom right
-    link(H_FIREWALL_LINK, L"Not on your iPhone? Fix the firewall", W - 28, H - 30, true);
+    if (g && layer) rt_->PopLayer();
+    SafeRelease(layer);
+    SafeRelease(g);
 }
+
+std::wstring App::clientName() const {
+    std::wstring n = from_utf8(client_.name);
+    return n.empty() ? L"your iPhone" : n;
+}
+
+std::wstring App::primaryIp() const {
+    for (auto& ni : mn::list_ipv4_interfaces()) return from_utf8(mn::ip_to_string(ni.addr));
+    return L"";
+}
+
+std::wstring App::videoInfo() const {
+    std::wstring s = haveFrame_ ? std::to_wstring(videoW_) + L" × " + std::to_wstring(videoH_) + L", " + std::to_wstring(fps_) + L" fps"
+                                : std::wstring(L"Waiting for video");
+    if (audioActive_) s += muted_ ? L", muted" : L", sound on";
+    return s;
+}
+
+void App::ensureArtwork() {
+    if (artwork_ || artworkData_.empty() || !wic_ || !rt_) return;
+    IWICStream* st = nullptr;
+    IWICBitmapDecoder* dec = nullptr;
+    IWICBitmapFrameDecode* fr = nullptr;
+    IWICFormatConverter* conv = nullptr;
+    if (SUCCEEDED(wic_->CreateStream(&st)) && SUCCEEDED(st->InitializeFromMemory(artworkData_.data(), (DWORD)artworkData_.size())) &&
+        SUCCEEDED(wic_->CreateDecoderFromStream(st, nullptr, WICDecodeMetadataCacheOnLoad, &dec)) && SUCCEEDED(dec->GetFrame(0, &fr)) &&
+        SUCCEEDED(wic_->CreateFormatConverter(&conv)) &&
+        SUCCEEDED(conv->Initialize(fr, GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom))) {
+        rt_->CreateBitmapFromWicBitmap(conv, nullptr, &artwork_);
+    }
+    SafeRelease(conv);
+    SafeRelease(fr);
+    SafeRelease(dec);
+    SafeRelease(st);
+    if (!artwork_) artworkData_.clear();
+}
+
+D2D1_RECT_F App::videoRect(float W, float H) const {
+    if (videoW_ <= 0 || videoH_ <= 0) return D2D1::RectF(0, 0, W, H);
+    float vw = (float)videoW_, vh = (float)videoH_;
+    float s = std::min(W / vw, H / vh);
+    float dw = vw * s, dh = vh * s;
+    return D2D1::RectF((W - dw) / 2, (H - dh) / 2, (W + dw) / 2, (H + dh) / 2);
+}
+
+// ================================================================== settings (layout shared, look per theme)
 
 void App::drawSettings(float W, float H) {
-    drawGrain(W, H, 0.55f);
-    drawTopBar(W, true, L"SETTINGS");
-    float x0 = 72;
-    float x1 = std::min(W - 40, x0 + 720);
-    float rowH = std::max(50.0f, std::min(64.0f, (H - 250) / 6.0f));
-    float y = 80;
-    IDWriteTextFormat* lab = fmt(15, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    IDWriteTextFormat* desc = fmt(13);
+    Theme& t = *theme_;
+    t.settingsBackground(*this, W, H);
+    float hh = t.headerHeight();
+    float x0, x1;
+    t.settingsColumn(W, x0, x1);
+    float rowH = t.rowHeight(H), pad = t.rowInset();
+    const float gap = 26;
 
-    auto section = [&](const wchar_t* title) {
-        y += 14;
-        text(title, D2D1::RectF(x0, y, x1, y + 22), fmt(13, DWRITE_FONT_WEIGHT_BOLD), INK);
-        y += 26;
-        line(x0, y, x1, y, INK, 1.0f, 1.5f);
-    };
-    auto label = [&](float ry, const wchar_t* l, const wchar_t* d, float reserve) {
-        text(l, D2D1::RectF(x0, ry - 19, x1 - reserve, ry + 1), lab, INK);
-        text(d, D2D1::RectF(x0, ry + 1, x1 - reserve, ry + 19), desc, INK2);
-    };
-    auto divider = [&](float ry) { line(x0, ry, x1, ry, INK, 0.25f, 1.0f); };
+    float maxScroll = std::max(0.0f, settingsContentH_ - (H - hh));
+    settingsScroll_ = std::max(0.0f, std::min(settingsScroll_, maxScroll));
 
-    section(L"This PC");
-    float ry = y + rowH / 2;
-    label(ry, L"Name", L"How this PC appears on your iPhone", 300);
-    D2D1_RECT_F box = D2D1::RectF(x1 - 270, ry - 16, x1, ry + 16);
-    bool focused = GetFocus() == edit_;
-    if (hover_ == H_NAMEBOX && !focused) fillRect(box, PAPER2);
-    line(box.left, box.bottom, box.right, box.bottom, focused ? COBALT : INK, 1.0f, focused ? 3.0f : 1.5f);
+    rt_->PushAxisAlignedClip(D2D1::RectF(0, hh, W, H), D2D1_ANTIALIAS_MODE_ALIASED);
+    hitClip_ = D2D1::RectF(0, hh, W, H);
+    hitClipOn_ = true;
+    float y = hh + 10 - settingsScroll_;
+    float lx0 = x0 + pad, lx1 = x1 - pad;
+
+    // ---- This PC
+    y = t.sectionTitle(*this, x0, x1, y, L"This PC");
+    D2D1_RECT_F g = D2D1::RectF(x0, y, x1, y + rowH);
+    t.group(*this, g, 1, rowH);
+    float cy = g.top + rowH / 2;
+    t.rowText(*this, lx0, lx1 - 280, cy, L"Name", L"How this PC appears on your iPhone");
+    D2D1_RECT_F box = D2D1::RectF(lx1 - 260, cy - 15, lx1, cy + 15);
+    D2D1_RECT_F editArea = t.textField(*this, box, GetFocus() == edit_, hover_ == H_NAMEBOX);
     addHit(H_NAMEBOX, box);
-    layoutEdit(true, D2D1::RectF(box.left + 2, box.top, box.right - 2, box.bottom - 3));
-    y += rowH;
+    layoutEdit(box.top >= hh && box.bottom <= H, editArea);
+    y = g.bottom + gap;
 
-    section(L"Screen mirroring");
-    ry = y + rowH / 2;
-    label(ry, L"Resolution", L"The sharpest picture your iPhone will send", 270);
-    choices({{H_RES0, L"720p"}, {H_RES1, L"1080p"}, {H_RES2, L"1440p"}, {H_RES3, L"4K"}}, H_RES0 + settings_.resolution, x1, ry);
-    divider(y + rowH);
-    ry += rowH;
-    label(ry, L"Frame rate", L"60 is smoother, 30 uses less Wi-Fi", 150);
-    choices({{H_FPS30, L"30"}, {H_FPS60, L"60"}}, settings_.fps == 30 ? H_FPS30 : H_FPS60, x1, ry);
-    divider(y + rowH * 2);
-    ry += rowH;
-    label(ry, L"Full screen on start", L"Esc leaves full screen, F11 switches it", 70);
-    toggle(H_AUTOFS, settings_.autoFullscreen, x1 - 48, ry);
-    y += rowH * 3;
+    // ---- Screen mirroring
+    y = t.sectionTitle(*this, x0, x1, y, L"Screen mirroring");
+    g = D2D1::RectF(x0, y, x1, y + rowH * 3);
+    t.group(*this, g, 3, rowH);
+    cy = g.top + rowH / 2;
+    t.rowText(*this, lx0, lx1 - 270, cy, L"Resolution", L"The sharpest picture your iPhone will send");
+    t.choices(*this, {{H_RES0, L"720p"}, {H_RES1, L"1080p"}, {H_RES2, L"1440p"}, {H_RES3, L"4K"}}, H_RES0 + settings_.resolution, lx1, cy);
+    cy += rowH;
+    t.rowText(*this, lx0, lx1 - 150, cy, L"Frame rate", L"60 is smoother, 30 uses less Wi-Fi");
+    t.choices(*this, {{H_FPS30, L"30"}, {H_FPS60, L"60"}}, settings_.fps == 30 ? H_FPS30 : H_FPS60, lx1, cy);
+    cy += rowH;
+    t.rowText(*this, lx0, lx1 - 70, cy, L"Full screen on start", L"Esc leaves full screen, F11 switches it");
+    t.toggle(*this, H_AUTOFS, settings_.autoFullscreen, lx1, cy);
+    y = g.bottom + gap;
 
-    section(L"Sound and network");
-    ry = y + rowH / 2;
-    label(ry, L"Play sound", L"Sound from your iPhone plays on this PC", 70);
-    toggle(H_AUDIO, settings_.audio, x1 - 48, ry);
-    divider(y + rowH);
-    ry += rowH;
-    label(ry, L"Windows Firewall", L"Fixes it when your iPhone can't find this PC", 140);
-    {
-        IDWriteTextFormat* bf = fmt(14, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
-        D2D1_RECT_F b = D2D1::RectF(x1 - 120, ry - 17, x1, ry + 17);
-        fillRect(b, hover_ == H_FIREWALL ? INK : COBALT);
-        icon(G_SHIELD, b.left + 20, ry, 13, WHITE);
-        text(L"Allow", D2D1::RectF(b.left + 28, b.top, b.right, b.bottom), bf, WHITE);
-        addHit(H_FIREWALL, b);
+    // ---- Sound and network
+    y = t.sectionTitle(*this, x0, x1, y, L"Sound and network");
+    g = D2D1::RectF(x0, y, x1, y + rowH * 2);
+    t.group(*this, g, 2, rowH);
+    cy = g.top + rowH / 2;
+    t.rowText(*this, lx0, lx1 - 70, cy, L"Play sound", L"Sound from your iPhone plays on this PC");
+    t.toggle(*this, H_AUDIO, settings_.audio, lx1, cy);
+    cy += rowH;
+    t.rowText(*this, lx0, lx1 - 140, cy, L"Windows Firewall", L"Fixes it when your iPhone can't find this PC");
+    t.button(*this, H_FIREWALL, L"Allow", G_SHIELD, lx1, cy);
+    y = g.bottom + gap;
+
+    // ---- Theme picker: a horizontal strip, one card per registered theme
+    y = t.sectionTitle(*this, x0, x1, y, L"Theme");
+    auto& list = allThemes();
+    const float cardW = 176, cardH = 110, nameH = 34, cgap = 16;
+    themeStripW_ = list.size() * cardW + (list.size() - 1) * cgap;
+    themeStripMax_ = std::max(0.0f, themeStripW_ - (x1 - x0));
+    themeScroll_ = std::max(0.0f, std::min(themeScroll_, themeStripMax_));
+    themeStripRect_ = D2D1::RectF(x0 - 6, y - 6, x1 + 6, y + cardH + nameH + 6);
+    addHit(H_THEME_STRIP, themeStripRect_);
+    rt_->PushAxisAlignedClip(themeStripRect_, D2D1_ANTIALIAS_MODE_ALIASED);
+    D2D1_RECT_F oldClip = hitClip_;
+    hitClip_ = D2D1::RectF(std::max(themeStripRect_.left, oldClip.left), std::max(themeStripRect_.top, oldClip.top),
+                           std::min(themeStripRect_.right, oldClip.right), std::min(themeStripRect_.bottom, oldClip.bottom));
+    for (size_t i = 0; i < list.size(); i++) {
+        float cx = x0 + i * (cardW + cgap) - themeScroll_;
+        D2D1_RECT_F pv = D2D1::RectF(cx, y, cx + cardW, y + cardH);
+        int id = H_THEME + (int)i;
+        t.themeCard(*this, pv, list[i], list[i] == theme_, hover_ == id);
+        addHit(id, D2D1::RectF(pv.left, pv.top, pv.right, pv.bottom + nameH));
     }
-    y += rowH * 2 + 26;
+    hitClip_ = oldClip;
+    rt_->PopAxisAlignedClip();
+    if (themeStripMax_ > 0) {  // tiny scroll hint
+        float vis = (x1 - x0) / themeStripW_;
+        float tw = (x1 - x0) * vis, tx = x0 + (x1 - x0 - tw) * (themeScroll_ / themeStripMax_);
+        line(tx, y + cardH + nameH + 2, tx + tw, y + cardH + nameH + 2, 0x808080, 0.5f, 3.0f);
+    }
+    y += cardH + nameH + gap;
 
+    // ---- footer
     std::wstring ver = std::wstring(kAppName) + L" " + kVersion + L", AirPlay port " + std::to_wstring(rx_.port());
-    text(ver, D2D1::RectF(x0, y - 11, x0 + 400, y + 11), fmt(12), INK3);
-    link(H_OPENLOG, L"Open log file", x1, y, true);
+    t.footnote(*this, ver, x0 + 2, y);
+    t.link(*this, H_OPENLOG, L"Open log file", x1 - 2, y, true);
+    y += 34;
+
+    settingsContentH_ = y + settingsScroll_ - hh;
+    hitClipOn_ = false;
+    rt_->PopAxisAlignedClip();
+    t.settingsHeader(*this, W, settingsScroll_ > 1);
 }
+
+// ================================================================== mirroring base layer
 
 void App::drawMirror(float W, float H) {
     rt_->Clear(D2D1::ColorF(0, 0, 0));
-    double t = animTime();
+    D2D1_RECT_F dst = videoRect(W, H);
     if (video_ && haveFrame_) {
-        float vw = (float)videoW_, vh = (float)videoH_;
-        float s = std::min(W / vw, H / vh);
-        float dw = vw * s, dh = vh * s;
-        D2D1_RECT_F dst = D2D1::RectF((W - dw) / 2, (H - dh) / 2, (W + dw) / 2, (H + dh) / 2);
         if (dc_) dc_->DrawBitmap(video_, &dst, 1.0f, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr, nullptr);
         else rt_->DrawBitmap(video_, dst, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
-        if (paused_) {
-            brush_->SetColor(D2D1::ColorF(0, 0, 0, 0.6f));
-            rt_->FillRectangle(D2D1::RectF(0, 0, W, H), brush_);
-            float pw = pixelTextWidth(L"SCREEN LOCKED", 4) + 20;
-            pixelBlock(L"SCREEN LOCKED", W / 2 - pw / 2, H / 2 - 30, W - 40, 4, COBALT, WHITE);
-            text(L"Unlock " + from_utf8(client_.name) + L" to carry on", D2D1::RectF(0, H / 2 + 22, W, H / 2 + 46),
-                 fmt(14, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER), WHITE, 0.85f);
-        }
+        if (paused_) theme_->drawMirrorPaused(*this, W, H, dst);
     } else {
-        drawHalftoneOrb(W / 2, H / 2 - 30, std::min(W, H) * 0.12f, t * 1.5, 1.0f, WHITE, ACID);
-        text(L"Starting screen mirroring from " + from_utf8(client_.name), D2D1::RectF(0, H / 2 + std::min(W, H) * 0.12f, W, H / 2 + std::min(W, H) * 0.12f + 30),
-             fmt(15, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER), WHITE, 0.85f);
+        theme_->drawMirrorWaiting(*this, W, H);
     }
-
-    float a = overlayAlpha_;
-    if (a < 0.02f) return;
-    ID2D1GradientStopCollection* stops = nullptr;
-    D2D1_GRADIENT_STOP gs[2] = {{0.0f, D2D1::ColorF(0, 0, 0, 0.75f * a)}, {1.0f, D2D1::ColorF(0, 0, 0, 0)}};
-    rt_->CreateGradientStopCollection(gs, 2, &stops);
-    ID2D1LinearGradientBrush* lg = nullptr;
-    if (stops) rt_->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties(D2D1::Point2F(0, 0), D2D1::Point2F(0, 110)), stops, &lg);
-    if (lg) rt_->FillRectangle(D2D1::RectF(0, 0, W, 110), lg);
-    SafeRelease(lg);
-    SafeRelease(stops);
-
-    // the sender, as a small identity block
-    rt_->PushAxisAlignedClip(D2D1::RectF(0, 0, W, H), D2D1_ANTIALIAS_MODE_ALIASED);
-    std::wstring who = from_utf8(client_.name);
-    D2D1_RECT_F b = pixelBlock(who, 20, 18, std::min(380.0f, W - 260), 2.5f, COBALT, WHITE);
-    std::wstring sub = haveFrame_ ? std::to_wstring(videoW_) + L" × " + std::to_wstring(videoH_) + L", " + std::to_wstring(fps_) + L" fps"
-                                  : std::wstring(L"Waiting for video");
-    if (audioActive_) sub += muted_ ? L", muted" : L", sound on";
-    text(sub, D2D1::RectF(b.right + 14, b.top, W - 220, b.bottom), fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD), WHITE, 0.85f * a);
-    rt_->PopAxisAlignedClip();
-
-    float bx = W - 36;
-    iconButton(H_DISCONNECT, G_CLOSE, bx, 36, 38, a, true);
-    bx -= 46;
-    iconButton(H_FULLSCREEN, fullscreen_ ? G_WINDOW : G_FULL, bx, 36, 38, a);
-    bx -= 46;
-    iconButton(H_MUTE, muted_ ? G_MUTE : G_VOLUME, bx, 36, 38, a);
-    bx -= 46;
-    iconButton(H_SETTINGS, G_SETTINGS, bx, 36, 38, a);
+    if (overlayAlpha_ >= 0.02f) theme_->drawMirrorOverlay(*this, W, H, overlayAlpha_, dst);
 }
 
-void App::drawNowPlaying(float W, float H) {
-    double t = animTime();
-    std::wstring title = title_.empty() ? L"Now playing" : title_;
-
-    // giant lime title, low on the canvas, cropped by the right edge
-    std::wstring giant = title;
-    size_t sp = giant.find(L' ');
-    if (sp != std::wstring::npos && sp >= 3) giant = giant.substr(0, sp);
-    if (giant.size() > 8) giant = giant.substr(0, 8);
-    float gs = H * 0.55f;
-    giantType(giant, W * 0.30f, H - gs * 0.92f, gs, ACID);
-    drawGrain(W, H, 0.55f);
-
-    drawTopBar(W, false, kAppName);
-    iconButton(H_DISCONNECT, G_CLOSE, W - 40, 34, 36, 1.0f, true);
-    iconButton(H_SETTINGS, G_SETTINGS, W - 86, 34, 36);
-
-    if (!artwork_ && !artworkData_.empty() && wic_) {
-        IWICStream* st = nullptr;
-        IWICBitmapDecoder* dec = nullptr;
-        IWICBitmapFrameDecode* fr = nullptr;
-        IWICFormatConverter* conv = nullptr;
-        if (SUCCEEDED(wic_->CreateStream(&st)) && SUCCEEDED(st->InitializeFromMemory(artworkData_.data(), (DWORD)artworkData_.size())) &&
-            SUCCEEDED(wic_->CreateDecoderFromStream(st, nullptr, WICDecodeMetadataCacheOnLoad, &dec)) &&
-            SUCCEEDED(dec->GetFrame(0, &fr)) && SUCCEEDED(wic_->CreateFormatConverter(&conv)) &&
-            SUCCEEDED(conv->Initialize(fr, GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom))) {
-            rt_->CreateBitmapFromWicBitmap(conv, nullptr, &artwork_);
-        }
-        SafeRelease(conv);
-        SafeRelease(fr);
-        SafeRelease(dec);
-        SafeRelease(st);
-        if (!artwork_) artworkData_.clear();
-    }
-
-    float x0 = std::max(28.0f, W * 0.075f);
-    float size = std::max(140.0f, std::min({300.0f, H - 230, W * 0.32f}));
-    float top = std::max(84.0f, (H - size) / 2 - 10);
-    D2D1_RECT_F art = D2D1::RectF(x0, top, x0 + size, top + size);
-    fillRect(D2D1::RectF(art.left + 12, art.top + 12, art.right + 12, art.bottom + 12), ACID);  // hard offset shadow
-    if (artwork_) {
-        rt_->DrawBitmap(artwork_, art, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
-    } else {
-        fillRect(art, COBALT);
-        rt_->PushAxisAlignedClip(art, D2D1_ANTIALIAS_MODE_ALIASED);
-        drawHalftoneOrb((art.left + art.right) / 2, (art.top + art.bottom) / 2, size * 0.30f, t, audio_.level() * 2.0f, WHITE, ACID);
-        rt_->PopAxisAlignedClip();
-    }
-    strokeRect(art, INK, 1.0f, 0, 2.0f);
-
-    // details column
-    float cx = art.right + 48;
-    float cw = W - cx - 40;
-    D2D1_RECT_F tb = pixelBlock(title, cx, top, cw, std::max(3.0f, std::min(6.0f, H / 110.0f)), COBALT, WHITE);
-    float y = tb.bottom + 26;
-    std::wstring sub = artist_;
-    if (!album_.empty()) sub += (sub.empty() ? L"" : L", ") + album_;
-    if (sub.empty()) sub = L"From " + from_utf8(client_.name);
-    text(sub, D2D1::RectF(cx, y - 12, cx + cw, y + 12), fmt(16, DWRITE_FONT_WEIGHT_SEMI_BOLD), INK);
-    y += 34;
-
-    float bw = std::min(420.0f, cw);
-    if (progDur_ > 0) {
-        double pos = progPos_ + (reduceMotion_ ? 0 : (mn::now_ms() - progStamp_) / 1000.0);
-        pos = std::min(pos, progDur_);
-        float frac = (float)(pos / progDur_);
-        line(cx, y, cx + bw, y, INK, 0.3f, 2.0f);
-        line(cx, y, cx + bw * frac, y, INK, 1.0f, 3.0f);
-        auto fmtTime = [](double s) {
-            int v = (int)s;
-            wchar_t b[16];
-            swprintf(b, 16, L"%d:%02d", v / 60, v % 60);
-            return std::wstring(b);
-        };
-        IDWriteTextFormat* tf = fmt(12, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-        text(fmtTime(pos), D2D1::RectF(cx, y + 6, cx + 80, y + 24), tf, INK2);
-        text(fmtTime(progDur_), D2D1::RectF(cx + bw - 80, y + 6, cx + bw, y + 24), fmt(12, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_TRAILING), INK2);
-        y += 46;
-    } else {
-        y += 10;
-    }
-
-    // live oscilloscope of what is playing
-    float sh = 64;
-    static float buf[512];
-    audio_.scope(buf, 512);
-    ID2D1PathGeometry* g = nullptr;
-    d2d_->CreatePathGeometry(&g);
-    if (g) {
-        ID2D1GeometrySink* sk = nullptr;
-        g->Open(&sk);
-        float mid = y + sh / 2;
-        sk->BeginFigure(D2D1::Point2F(cx, mid - buf[0] * sh * 0.9f), D2D1_FIGURE_BEGIN_HOLLOW);
-        for (int i = 1; i < 512; i++) {
-            float v = std::max(-1.0f, std::min(1.0f, buf[i] * 1.6f));
-            sk->AddLine(D2D1::Point2F(cx + bw * i / 511.0f, mid - v * sh / 2));
-        }
-        sk->EndFigure(D2D1_FIGURE_END_OPEN);
-        sk->Close();
-        sk->Release();
-        brush_->SetColor(rgb(INK));
-        rt_->DrawGeometry(g, brush_, 1.5f);
-        g->Release();
-    }
-    y += sh + 22;
-    iconButton(H_MUTE, muted_ ? G_MUTE : G_VOLUME, cx + 18, y, 36);
-    std::wstring st = !settings_.audio ? L"Sound is off in Settings" : (muted_ ? L"Muted" : L"Playing on this PC");
-    text(st, D2D1::RectF(cx + 46, y - 12, cx + cw, y + 12), fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD), settings_.audio ? INK2 : ALERT);
-}
-
-void App::drawToast(float W, float H) {
-    uint64_t now = mn::now_ms();
-    if (!toastUntil_ || now > toastUntil_ + 250) return;
-    float a = now > toastUntil_ ? 1.0f - (now - toastUntil_) / 250.0f : 1.0f;
-    IDWriteTextFormat* f = fmt(14, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    float tw = std::min(textWidth(toast_, f) + 36, W - 56);
-    D2D1_RECT_F r = D2D1::RectF(28, H - 100, 28 + tw, H - 64);
-    fillRect(r, INK, a);
-    fillRect(D2D1::RectF(r.left, r.top, r.left + 6, r.bottom), ACID, a);
-    text(toast_, D2D1::RectF(r.left + 20, r.top, r.right - 8, r.bottom), f, ACID, a);
-}
+// ================================================================== frame
 
 void App::render() {
     if (!createDeviceResources()) return;
@@ -803,18 +642,23 @@ void App::render() {
     GetClientRect(hwnd_, &rc);
     float W = rc.right * 96.0f / dpi_, H = rc.bottom * 96.0f / dpi_;
     hits_.clear();
+    hitClipOn_ = false;
     rt_->BeginDraw();
     rt_->SetTransform(D2D1::Matrix3x2F::Identity());
-    rt_->Clear(rgb(PAPER));
+    rt_->Clear(rgb(theme_->windowColor(*this)));
     if (settingsOpen_) {
         drawSettings(W, H);
     } else {
         layoutEdit(false, D2D1::RectF());
         if (mirrorActive_) drawMirror(W, H);
-        else if (sessionActive_ && audioActive_) drawNowPlaying(W, H);
-        else drawHome(W, H);
+        else if (sessionActive_ && audioActive_) { ensureArtwork(); theme_->drawNowPlaying(*this, W, H); }
+        else theme_->drawHome(*this, W, H);
     }
-    drawToast(W, H);
+    uint64_t now = mn::now_ms();
+    if (toastUntil_ && now <= toastUntil_ + 250) {
+        float a = now > toastUntil_ ? 1.0f - (now - toastUntil_) / 250.0f : 1.0f;
+        theme_->drawToast(*this, W, H, toast_, a);
+    }
     HRESULT hr = rt_->EndDraw();
     if (hr == (HRESULT)D2DERR_RECREATE_TARGET) {
         discardDeviceResources();

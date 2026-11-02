@@ -1,10 +1,14 @@
-// Mirrorly - application window, state and rendering (Win32 + Direct2D/DirectWrite)
+// Mirrorly - application window, state, drawing toolkit and the theme interface
 #pragma once
 #ifndef UNICODE
 #define UNICODE
 #endif
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <winsock2.h>
 #include <windows.h>
 #include <windowsx.h>
@@ -19,6 +23,7 @@
 #include <cstdio>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "audio_out.h"
@@ -38,29 +43,14 @@ template <class T> static inline void SafeRelease(T*& p) {
     if (p) { p->Release(); p = nullptr; }
 }
 
-// ------------------------------------------------------------------ identity: "acid poster"
-// Concrete-grey paper, giant acid-lime type bleeding off the edges, an electric cobalt block
-// carrying pixel lettering, a gunmetal halftone object and small black technical labels.
-namespace tok {
-const uint32_t PAPER  = 0xC4C7BD;  // background: concrete grey with a green cast
-const uint32_t PAPER2 = 0xB2B5AA;  // hairlines and quiet outlines on paper
-const uint32_t INK    = 0x000000;  // primary text
-const uint32_t INK2   = 0x34372F;  // secondary text
-const uint32_t INK3   = 0x666A5F;  // tertiary text
-const uint32_t ACID   = 0xD4FF1E;  // signal: giant type, ready, selected
-const uint32_t COBALT = 0x2F3DFF;  // identity block, primary action, connecting
-const uint32_t WHITE  = 0xF5F6F0;  // text on cobalt / on video
-const uint32_t GUN    = 0x1F211E;  // halftone gunmetal
-const uint32_t ALERT  = 0xFF4A17;  // destructive, problems
-}  // namespace tok
-
 static inline D2D1_COLOR_F rgb(uint32_t c, float a = 1.0f) {
     return D2D1::ColorF(((c >> 16) & 255) / 255.0f, ((c >> 8) & 255) / 255.0f, (c & 255) / 255.0f, a);
 }
 
 // icon glyphs (Segoe Fluent Icons / Segoe MDL2 Assets)
 static const wchar_t G_SETTINGS = 0xE713, G_BACK = 0xE72B, G_CLOSE = 0xE711, G_FULL = 0xE740, G_WINDOW = 0xE73F,
-                     G_VOLUME = 0xE767, G_MUTE = 0xE74F, G_MUSIC = 0xE8D6, G_SHIELD = 0xEA18;
+                     G_VOLUME = 0xE767, G_MUTE = 0xE74F, G_MUSIC = 0xE8D6, G_SHIELD = 0xEA18, G_LOCK = 0xE72E,
+                     G_CHECK = 0xE73E;
 
 // ------------------------------------------------------------------ events from the engine
 enum EvType {
@@ -77,13 +67,74 @@ struct Event {
     double d1 = 0, d2 = 0;
 };
 
+// clickable things. Theme cards use H_THEME + index.
 enum Hit {
     H_NONE, H_SETTINGS, H_BACK, H_FIREWALL, H_RES0, H_RES1, H_RES2, H_RES3, H_FPS30, H_FPS60, H_AUDIO, H_AUTOFS,
-    H_MUTE, H_FULLSCREEN, H_DISCONNECT, H_OPENLOG, H_FIREWALL_LINK, H_NAMEBOX
+    H_MUTE, H_FULLSCREEN, H_DISCONNECT, H_OPENLOG, H_FIREWALL_LINK, H_NAMEBOX, H_THEME_STRIP,
+    H_THEME = 100
 };
 
-enum FontRole { F_UI, F_CONDENSED, F_ICON };
+// Font roles. Each theme maps F_UI to its own family; F_UI_DISPLAY is used for large type.
+enum FontRole { F_UI, F_UI_DISPLAY, F_CONDENSED, F_ICON };
 
+typedef std::vector<std::pair<int, std::wstring>> ChoiceList;
+
+class App;
+
+// ------------------------------------------------------------------ themes
+// A theme draws every screen and every settings control. To add one:
+//   1. create src/app/theme_<name>.cpp with a class deriving from Theme
+//   2. add it to allThemes() in themes.cpp (and an icon in res/app.rc if it has its own)
+class Theme {
+public:
+    virtual ~Theme() {}
+    // identity
+    virtual const wchar_t* id() const = 0;      // saved in settings.ini
+    virtual const wchar_t* name() const = 0;    // shown in the theme picker
+    virtual int iconResource() const = 0;       // window / taskbar icon (resource id)
+    virtual void onActivate(App&) {}            // theme became current (e.g. read system light/dark)
+    // window chrome
+    virtual bool darkTitleBar(App&) const = 0;
+    virtual uint32_t windowColor(App&) const = 0;       // caption + background behind the first paint
+    virtual uint32_t editBackground(App&) const = 0;    // native name field
+    virtual uint32_t editText(App&) const = 0;
+    virtual const wchar_t* uiFont(App&, bool display) const = 0;
+
+    // full screens
+    virtual void drawHome(App&, float W, float H) = 0;
+    virtual void drawNowPlaying(App&, float W, float H) = 0;
+    virtual void drawMirrorWaiting(App&, float W, float H) = 0;
+    virtual void drawMirrorPaused(App&, float W, float H, D2D1_RECT_F video) = 0;
+    virtual void drawMirrorOverlay(App&, float W, float H, float alpha, D2D1_RECT_F video) = 0;
+    virtual void drawToast(App&, float W, float H, const std::wstring& msg, float alpha) = 0;
+    // thumbnail for the theme picker
+    virtual void drawPreview(App&, D2D1_RECT_F r) = 0;
+
+    // settings building blocks (layout is shared, see App::drawSettings)
+    virtual float headerHeight() const { return 72; }
+    virtual void settingsColumn(float W, float& x0, float& x1) const = 0;
+    virtual float rowHeight(float H) const = 0;
+    virtual float rowInset() const = 0;                 // padding inside a group
+    virtual void settingsBackground(App&, float W, float H) = 0;
+    virtual void settingsHeader(App&, float W, bool scrolled) = 0;
+    virtual float sectionTitle(App&, float x0, float x1, float y, const wchar_t* title) = 0;  // returns next y
+    virtual void group(App&, D2D1_RECT_F r, int rows, float rowH) = 0;
+    virtual void rowText(App&, float x0, float x1, float cy, const wchar_t* label, const wchar_t* desc) = 0;
+    virtual void toggle(App&, int id, bool on, float right, float cy) = 0;
+    virtual void choices(App&, const ChoiceList& items, int selected, float right, float cy) = 0;
+    virtual void button(App&, int id, const wchar_t* label, wchar_t glyph, float right, float cy) = 0;
+    // draws the name field and returns where the native edit box goes
+    virtual D2D1_RECT_F textField(App&, D2D1_RECT_F r, bool focused, bool hovered) = 0;
+    virtual void link(App&, int id, const std::wstring& s, float x, float cy, bool alignRight) = 0;
+    virtual void footnote(App&, const std::wstring& s, float x, float cy) = 0;
+    virtual void themeCard(App&, D2D1_RECT_F preview, Theme* t, bool selected, bool hovered) = 0;
+};
+
+std::vector<Theme*>& allThemes();
+Theme* findTheme(const std::wstring& id);
+
+// ------------------------------------------------------------------ the application
+// Members are public: themes draw with the toolkit below and read the session state.
 class App : public mn::ReceiverListener {
 public:
     bool init(HINSTANCE inst, int show);
@@ -114,7 +165,6 @@ public:
 
     static App* instance;
 
-private:
     template <class F> void post(EvType t, F fill) {
         Event* e = new Event();
         e->type = t;
@@ -135,6 +185,8 @@ private:
     void onFrame();
     void startReceiver();
     void applySettings(bool reannounce);
+    void applyTheme(bool announce);
+    void readSystemTheme();
     void commitName();
     void click(int hit);
     void setFullscreen(bool fs);
@@ -148,22 +200,12 @@ private:
     void discardDeviceResources();
     void render();
     double animTime() const;
-    void drawHome(float W, float H);
     void drawSettings(float W, float H);
     void drawMirror(float W, float H);
-    void drawNowPlaying(float W, float H);
-    void drawTopBar(float W, bool back, const wchar_t* title);
-    void drawToast(float W, float H);
-    // poster elements
-    void drawGrain(float W, float H, float opacity);
-    void drawHalftoneOrb(float cx, float cy, float r, double t, float energy, uint32_t ink, uint32_t rim);
-    void drawCracks(float cx, float cy, float r, float W, float H, uint32_t color, float alpha);
-    void giantType(const std::wstring& s, float x, float y, float size, uint32_t color, float alpha = 1.0f);
-    float pixelText(const std::wstring& s, float x, float y, float px, uint32_t color, float alpha = 1.0f);
-    float pixelTextWidth(const std::wstring& s, float px) const;
-    D2D1_RECT_F pixelBlock(const std::wstring& s, float x, float y, float maxW, float px, uint32_t bg, uint32_t fg);
-    void labelColumn(const std::vector<std::wstring>& lines, float right, float top, uint32_t color);
-    // primitives
+    void ensureArtwork();
+    D2D1_RECT_F videoRect(float W, float H) const;
+
+    // ---- drawing toolkit (render.cpp), shared by all themes
     IDWriteTextFormat* fmt(float size, DWRITE_FONT_WEIGHT w = DWRITE_FONT_WEIGHT_NORMAL,
                            DWRITE_TEXT_ALIGNMENT a = DWRITE_TEXT_ALIGNMENT_LEADING, FontRole role = F_UI);
     void text(const std::wstring& s, D2D1_RECT_F r, IDWriteTextFormat* f, uint32_t color, float alpha = 1.0f);
@@ -173,14 +215,27 @@ private:
     void strokeRect(D2D1_RECT_F r, uint32_t color, float alpha = 1.0f, float radius = 0, float w = 1.0f);
     void line(float x0, float y0, float x1, float y1, uint32_t color, float alpha = 1.0f, float w = 1.0f);
     void dot(float cx, float cy, float r, uint32_t color, float alpha = 1.0f);
-    void iconButton(int id, wchar_t g, float cx, float cy, float size, float alpha = 1.0f, bool destructive = false);
-    void toggle(int id, bool on, float x, float y);
-    void choices(const std::vector<std::pair<int, std::wstring>>& items, int selected, float right, float cy);
-    void link(int id, const std::wstring& s, float x, float y, bool alignRight);
-    void addHit(int id, D2D1_RECT_F r) { hits_.push_back({id, r}); }
+    void softShadow(D2D1_RECT_F r, float radius, float strength, float spread = 10, float dy = 4);
+    void activitySpinner(float cx, float cy, float r, uint32_t color);
+    void drawBlurred(ID2D1Bitmap* bmp, D2D1_RECT_F dst, float blur, float opacity, D2D1_RECT_F* clip, float clipRadius);
+    void addHit(int id, D2D1_RECT_F r);
     int hitTest(float x, float y);
     void layoutEdit(bool visible, D2D1_RECT_F r);
+    // poster toolkit (also usable by other themes)
+    void drawGrain(float W, float H, float opacity);
+    void drawHalftoneOrb(float cx, float cy, float r, double t, float energy, uint32_t ink, uint32_t rim);
+    void drawCracks(float cx, float cy, float r, float W, float H, uint32_t color, float alpha);
+    void giantType(const std::wstring& s, float x, float y, float size, uint32_t color, float alpha = 1.0f);
+    float pixelText(const std::wstring& s, float x, float y, float px, uint32_t color, float alpha = 1.0f);
+    float pixelTextWidth(const std::wstring& s, float px) const;
+    D2D1_RECT_F pixelBlock(const std::wstring& s, float x, float y, float maxW, float px, uint32_t bg, uint32_t fg);
+    void labelColumn(const std::vector<std::wstring>& lines, float right, float top, uint32_t color);
+    // shared text helpers
+    std::wstring clientName() const;
+    std::wstring primaryIp() const;
+    std::wstring videoInfo() const;
 
+    // ---- state
     HINSTANCE inst_ = nullptr;
     HWND hwnd_ = nullptr;
     HWND edit_ = nullptr;
@@ -189,6 +244,8 @@ private:
     HBRUSH editBrush_ = nullptr;
     UINT dpi_ = 96;
     bool reduceMotion_ = false;
+    bool systemDark_ = false;
+    Theme* theme_ = nullptr;
 
     ID2D1Factory* d2d_ = nullptr;
     IDWriteFactory* dw_ = nullptr;
@@ -202,11 +259,17 @@ private:
     ID2D1Bitmap* artwork_ = nullptr;
     std::vector<uint8_t> artworkData_;
     std::map<std::wstring, IDWriteTextFormat*> formats_;
-    std::wstring uiFont_ = L"Segoe UI", iconFont_ = L"Segoe MDL2 Assets";
+    std::wstring bahnschrift_ = L"Segoe UI", segoeText_ = L"Segoe UI", segoeDisplay_ = L"Segoe UI",
+                 iconFont_ = L"Segoe MDL2 Assets";
 
     std::vector<std::pair<int, D2D1_RECT_F>> hits_;
+    D2D1_RECT_F hitClip_{};
+    bool hitClipOn_ = false;
     int hover_ = H_NONE, pressed_ = H_NONE;
     bool settingsOpen_ = false;
+    float settingsScroll_ = 0, settingsContentH_ = 0;
+    float themeScroll_ = 0, themeStripW_ = 0, themeStripMax_ = 0;
+    D2D1_RECT_F themeStripRect_{};
     bool fullscreen_ = false;
     WINDOWPLACEMENT placement_{sizeof(WINDOWPLACEMENT)};
     uint64_t lastMouseMove_ = 0;
