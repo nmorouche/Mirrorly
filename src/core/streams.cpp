@@ -161,11 +161,14 @@ void MirrorStream::loop() {
             spsPps_.insert(spsPps_.end(), payload.begin() + 8, payload.begin() + 8 + spsLen);
             spsPps_.insert(spsPps_.end(), sc, sc + 4);
             spsPps_.insert(spsPps_.end(), payload.begin() + 8 + spsLen + 3, payload.begin() + 8 + spsLen + 3 + ppsLen);
-            float w, h;
-            uint32_t wi = le32(&hdr[56]), hi = le32(&hdr[60]);
-            memcpy(&w, &wi, 4);
-            memcpy(&h, &hi, 4);
-            LOGI("mirror: codec config received, stream %dx%d", (int)w, (int)h);
+            auto f32 = [&](int off) {
+                uint32_t v = le32(&hdr[off]);
+                float r;
+                memcpy(&r, &v, 4);
+                return r;
+            };
+            LOGI("mirror: codec config: source %.2fx%.2f, offset %.2f,%.2f, size %.2fx%.2f (option 0x%02x)", f32(40), f32(44),
+                 f32(48), f32(52), f32(56), f32(60), option);
         }
         // type 2 (heartbeat) and 5 (stream report) need no handling
     }
@@ -219,6 +222,12 @@ void MirrorStream::decodeAndPublish(const uint8_t* annexb, size_t len) {
     f.pixels.resize((size_t)f.stride * h);
     f.seq = ++frameSeq_;
     if (mn_vdec_frame_bgra(decoder_, f.pixels.data(), f.stride, w, h) != 0) return;
+    if (w != lastW_ || h != lastH_) {
+        lastW_ = w;
+        lastH_ = h;
+        char info[256];
+        if (mn_vdec_describe(decoder_, info, sizeof(info)) == 0) LOGI("mirror: %s", info);
+    }
     rx_->frames().endWrite();
     if (rx_->listener()) rx_->listener()->onVideoFrame();
 }

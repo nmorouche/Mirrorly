@@ -9,6 +9,7 @@
  * UxPlay projects and are licensed under the GNU GPL v3. This file is GPL v3 too.
  */
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -16,6 +17,7 @@
 #include <libavutil/frame.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/log.h>
+#include <libavutil/pixdesc.h>
 #include <libavutil/channel_layout.h>
 #include <libswscale/swscale.h>
 
@@ -206,6 +208,19 @@ EXPORT int mn_vdec_frame_bgra(void *h, uint8_t *dst, int dst_stride, int dst_w, 
     uint8_t *dst_data[4] = { dst, NULL, NULL, NULL };
     int dst_lines[4] = { dst_stride, 0, 0, 0 };
     sws_scale(d->sws, (const uint8_t * const *) f->data, f->linesize, 0, f->height, dst_data, dst_lines);
+    return 0;
+}
+
+/* Diagnostics: one-line description of the current frame's layout. */
+EXPORT int mn_vdec_describe(void *h, char *buf, int len)
+{
+    mn_vdec *d = (mn_vdec *) h;
+    if (!d || !d->has_ready || !buf || len <= 0) return -1;
+    AVFrame *f = d->ready;
+    const char *fmt = av_get_pix_fmt_name((enum AVPixelFormat) f->format);
+    snprintf(buf, len, "frame %dx%d coded %dx%d fmt %s linesize %d/%d/%d range %d space %d conv_w %d",
+             f->width, f->height, d->ctx->coded_width, d->ctx->coded_height, fmt ? fmt : "?",
+             f->linesize[0], f->linesize[1], f->linesize[2], (int) f->color_range, (int) f->colorspace, d->sws_dw);
     return 0;
 }
 

@@ -52,6 +52,10 @@ bool App::init(HINSTANCE inst, int show) {
         fflush(lf);
     });
     mn::log_set_level(mn::LogLevel::Debug);
+#ifndef MIRRORLY_BUILD
+#define MIRRORLY_BUILD "dev"
+#endif
+    mn::logf(mn::LogLevel::Info, "Mirrorly %s (build %s)", MIRRORLY_VERSION, MIRRORLY_BUILD);
 
     if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory), nullptr, (void**)&d2d_)))
         return false;
