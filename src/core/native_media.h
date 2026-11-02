@@ -15,7 +15,9 @@ const char *mn_version(void);
 void *mn_vdec_create(int threads);
 int mn_vdec_decode(void *h, const uint8_t *data, int len);
 int mn_vdec_frame_size(void *h, int *w, int *hgt);
+int mn_vdec_stride_for(int w);
 int mn_vdec_frame_bgra(void *h, uint8_t *dst, int dst_stride, int dst_w, int dst_h);
+int mn_vdec_describe(void *h, char *buf, int len);
 void mn_vdec_flush(void *h);
 void mn_vdec_destroy(void *h);
 

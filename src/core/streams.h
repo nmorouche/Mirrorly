@@ -54,6 +54,7 @@ private:
     bool paused_ = false;
     std::atomic<uint64_t> lastData_{0};
     uint64_t frameSeq_ = 0;
+    int lastW_ = 0, lastH_ = 0;
 };
 
 class AudioStream {

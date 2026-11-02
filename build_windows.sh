@@ -12,7 +12,8 @@ VER_NUM="${V1:-0},${V2:-0},${V3:-0},0"
 CXX=x86_64-w64-mingw32-g++-posix
 OUT=out/win; mkdir -p $OUT/obj
 INC="-I src/core -I src/app -I third_party/playfair -I third_party/monocypher -I third_party/tinyaes -I $FF/include"
-CFLAGS="-O2 -DNDEBUG -DMIRRORLY_VERSION=\"$VERSION\" -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 $INC"
+BUILD=${BUILD:-$(git rev-parse --short HEAD 2>/dev/null || echo dev)}
+CFLAGS="-O2 -DNDEBUG -DMIRRORLY_BUILD=\"$BUILD\" -DMIRRORLY_VERSION=\"$VERSION\" -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 $INC"
 for f in third_party/playfair/*.c third_party/monocypher/*.c third_party/tinyaes/aes.c src/core/native_media.c; do
   o=$OUT/obj/$(basename $f .c).o; [ $o -nt $f ] || $CC $CFLAGS -c $f -o $o
 done
