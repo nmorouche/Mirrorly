@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out the code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install the MinGW-w64 toolchain
         run: |
@@ -24,7 +24,7 @@ jobs:
 
       - name: Restore cached FFmpeg
         id: ffmpeg-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: deps/ffmpeg-win/install
           key: ffmpeg-n7.1-win64-${{ hashFiles('build_ffmpeg.sh') }}
@@ -45,7 +45,7 @@ jobs:
           (cd dist && sha256sum Mirrorly.exe > Mirrorly.exe.sha256)
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: Mirrorly-win64
           path: dist/
