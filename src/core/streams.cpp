@@ -215,7 +215,7 @@ void MirrorStream::decodeAndPublish(const uint8_t* annexb, size_t len) {
     VideoFrame& f = rx_->frames().beginWrite();
     f.width = w;
     f.height = h;
-    f.stride = w * 4;
+    f.stride = mn_vdec_stride_for(w);  // padded rows: see native_media.c
     f.pixels.resize((size_t)f.stride * h);
     f.seq = ++frameSeq_;
     if (mn_vdec_frame_bgra(decoder_, f.pixels.data(), f.stride, w, h) != 0) return;

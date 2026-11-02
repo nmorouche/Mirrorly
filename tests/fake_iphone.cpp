@@ -444,7 +444,7 @@ int main(int argc, char** argv) {
             sock_send_all(v, hdr, 128);
             sock_send_all(v, payload.data(), payload.size());
         };
-        bool sentConfig = false;
+        std::vector<uint8_t> sentSps;  // codec config is re-sent whenever it changes (e.g. rotation)
         int passes = seconds ? (seconds + 2) / 3 : 1;  // the clip is 3 s long; loop it on the same connection
         for (int pass = 0; pass < passes; pass++)
         for (auto& nal : nals) {
@@ -461,7 +461,7 @@ int main(int argc, char** argv) {
                 continue;
             }
             if (t == 1 || t == 5) {
-                if (t == 5 && !sps.empty() && !pps.empty() && !sentConfig) {
+                if (t == 5 && !sps.empty() && !pps.empty() && sps != sentSps) {
                     std::vector<uint8_t> avcc = {1, sps[1], sps[2], sps[3], 0xFF, 0xE1, (uint8_t)(sps.size() >> 8), (uint8_t)sps.size()};
                     avcc.insert(avcc.end(), sps.begin(), sps.end());
                     avcc.push_back(1);
@@ -469,7 +469,7 @@ int main(int argc, char** argv) {
                     avcc.push_back((uint8_t)pps.size());
                     avcc.insert(avcc.end(), pps.begin(), pps.end());
                     sendPacket(1, avcc, 0x16);
-                    sentConfig = true;
+                    sentSps = sps;
                 }
                 std::vector<uint8_t> frame = pendingNonVcl;
                 pendingNonVcl.clear();

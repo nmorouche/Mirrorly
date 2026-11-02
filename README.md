@@ -144,7 +144,15 @@ To build locally with a version: `VERSION=1.0.0 ./build_windows.sh`.
 ./out/linux/fake_iphone /path/to/testmedia 2    # 2 = ALAC, 4 = AAC-LC
 ```
 
-The test media folder needs these files:
+`tests/video_edges.cpp` checks that every pixel of every decoded frame is drawn, whatever the frame width.
+iPhones send odd widths such as 1014 pixels in portrait:
+
+```bash
+ffmpeg -f lavfi -i testsrc2=size=1014x1440:rate=30 -frames:v 10 -c:v libx264 -bf 0 -f h264 odd.h264
+./out/linux/video_edges odd.h264
+```
+
+The test media folder for `fake_iphone` needs these files:
 - `video.h264`: Annex-B H.264
 - `alac_packets.bin` or `aac_packets.bin`: audio packets, each preceded by its 32-bit little-endian length
 

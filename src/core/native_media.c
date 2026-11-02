@@ -160,6 +160,19 @@ static int sws_space_for(int cs)
 
 /* Convert the most recent frame into a BGRA buffer of size dst_w x dst_h
  * (normally the frame size; may be smaller to downscale). */
+/* Required BGRA row stride (bytes) for a frame of width w. Rows are padded to a multiple of
+ * 16 pixels: swscale's fast YUV->RGB path converts 8 pixels at a time and silently skips the
+ * remaining columns when the width is not a multiple of 8 (e.g. 1014-pixel portrait streams),
+ * which left a strip of stale pixels along the right edge. */
+EXPORT int mn_vdec_stride_for(int w)
+{
+    return ((w + 15) & ~15) * 4;
+}
+
+/* Convert the most recent frame into a BGRA buffer of size dst_w x dst_h
+ * (normally the frame size; may be smaller to downscale). For a 1:1 conversion, pass a
+ * dst_stride of at least mn_vdec_stride_for(dst_w): the padding columns are converted too
+ * (from the decoder's padded planes) so every visible column is always written. */
 EXPORT int mn_vdec_frame_bgra(void *h, uint8_t *dst, int dst_stride, int dst_w, int dst_h)
 {
     mn_vdec *d = (mn_vdec *) h;
@@ -170,17 +183,25 @@ EXPORT int mn_vdec_frame_bgra(void *h, uint8_t *dst, int dst_stride, int dst_w, 
     int space = sws_space_for(f->colorspace);
     int src_fmt = fmt;
     if (fmt == AV_PIX_FMT_YUVJ420P) src_fmt = AV_PIX_FMT_YUV420P;
-    if (!d->sws || d->sws_w != f->width || d->sws_h != f->height || d->sws_fmt != src_fmt ||
-        d->sws_range != range || d->sws_space != space || d->sws_dw != dst_w || d->sws_dh != dst_h) {
+
+    int sw = f->width, dw = dst_w;
+    if (dst_w == f->width && dst_h == f->height) {
+        /* 1:1: widen the conversion to a multiple of 16 when both buffers have room */
+        int pw = (f->width + 15) & ~15;
+        int chroma_ok = (src_fmt == AV_PIX_FMT_YUV420P || src_fmt == AV_PIX_FMT_YUV422P) ? (f->linesize[1] >= pw / 2 && f->linesize[2] >= pw / 2)
+                                                                                         : 0;
+        if (pw * 4 <= dst_stride && f->linesize[0] >= pw && chroma_ok) sw = dw = pw;
+    }
+    if (!d->sws || d->sws_w != sw || d->sws_h != f->height || d->sws_fmt != src_fmt ||
+        d->sws_range != range || d->sws_space != space || d->sws_dw != dw || d->sws_dh != dst_h) {
         if (d->sws) sws_freeContext(d->sws);
-        int flags = (dst_w == f->width && dst_h == f->height) ? SWS_BILINEAR : SWS_BICUBIC;
-        d->sws = sws_getContext(f->width, f->height, src_fmt, dst_w, dst_h, AV_PIX_FMT_BGRA,
-                                flags, NULL, NULL, NULL);
+        int flags = (dw == sw && dst_h == f->height) ? SWS_BILINEAR : SWS_BICUBIC;
+        d->sws = sws_getContext(sw, f->height, src_fmt, dw, dst_h, AV_PIX_FMT_BGRA, flags, NULL, NULL, NULL);
         if (!d->sws) return -2;
         const int *coefs = sws_getCoefficients(space);
         sws_setColorspaceDetails(d->sws, coefs, range, sws_getCoefficients(SWS_CS_DEFAULT), 1, 0, 1 << 16, 1 << 16);
-        d->sws_w = f->width; d->sws_h = f->height; d->sws_fmt = src_fmt;
-        d->sws_range = range; d->sws_space = space; d->sws_dw = dst_w; d->sws_dh = dst_h;
+        d->sws_w = sw; d->sws_h = f->height; d->sws_fmt = src_fmt;
+        d->sws_range = range; d->sws_space = space; d->sws_dw = dw; d->sws_dh = dst_h;
     }
     uint8_t *dst_data[4] = { dst, NULL, NULL, NULL };
     int dst_lines[4] = { dst_stride, 0, 0, 0 };
