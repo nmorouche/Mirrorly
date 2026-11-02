@@ -1,0 +1,11 @@
+# build output
+out/
+*.o
+*.exe
+*.dll
+# runtime files
+*.log
+# packaged archives
+*.zip
+*.bundle
+deps/
