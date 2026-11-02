@@ -16,7 +16,7 @@
 - **Audio**, both while mirroring and for music-only AirPlay (ALAC, AAC, AAC-ELD)
 - **Now Playing** view with artwork, title, artist and progress when streaming music
 - **Portable**: a single `Mirrorly.exe` (about 4.5 MB) with no installer, runtime, Bonjour or iTunes needed
-- **Clean interface**: dark theme, full screen, controls that hide while you watch, sharp on high-DPI screens
+- **Acid poster look**: concrete-grey paper, giant acid-lime type, a cobalt identity block with pixel lettering, a halftone object that turns cobalt while your iPhone connects, and a live waveform while music plays
 - **Volume** follows the iPhone's volume buttons, with a mute button on the PC
 
 Tested with an iPhone on iOS 27.2 and Windows 11.

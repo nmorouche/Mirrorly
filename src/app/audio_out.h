@@ -18,6 +18,8 @@ public:
     void flush();
     void setGain(float g) { gain_ = g; }
     float level() const { return level_; }  // recent peak 0..1 (for UI)
+    // Copies the most recent n mono samples being played (-1..1), oldest first. Returns n.
+    int scope(float* out, int n);
 
 private:
     void loop();
@@ -29,4 +31,7 @@ private:
     bool primed_ = false;
     std::atomic<float> gain_{1.0f};
     std::atomic<float> level_{0.0f};
+    std::mutex scopeM_;
+    std::vector<float> scope_ = std::vector<float>(4096, 0.0f);
+    size_t scopePos_ = 0;
 };

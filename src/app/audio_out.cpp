@@ -54,6 +54,15 @@ void AudioOut::push(const int16_t* pcm, int frames) {
     }
 }
 
+int AudioOut::scope(float* out, int n) {
+    std::lock_guard<std::mutex> lk(scopeM_);
+    size_t cap = scope_.size();
+    if ((size_t)n > cap) n = (int)cap;
+    size_t start = (scopePos_ + cap - (size_t)n) % cap;
+    for (int i = 0; i < n; i++) out[i] = running_ ? scope_[(start + i) % cap] : 0.0f;
+    return n;
+}
+
 void AudioOut::loop() {
     HANDLE ev = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     WAVEFORMATEX fmt{};
@@ -104,6 +113,13 @@ void AudioOut::loop() {
                 }
             }
             level_ = level_ * 0.7f + 0.3f * (peak / 32768.0f);
+            {
+                std::lock_guard<std::mutex> lk(scopeM_);
+                for (size_t k = 0; k + 1 < want; k += 2) {
+                    scope_[scopePos_] = (out[k] + out[k + 1]) / 65536.0f;
+                    scopePos_ = (scopePos_ + 1) % scope_.size();
+                }
+            }
             hdrs[i].dwFlags &= ~WHDR_DONE;
             waveOutWrite(wo, &hdrs[i], sizeof(WAVEHDR));
         }
