@@ -73,6 +73,7 @@ struct Event {
 enum Hit {
     H_NONE, H_SETTINGS, H_BACK, H_FIREWALL, H_RES0, H_RES1, H_RES2, H_RES3, H_FPS30, H_FPS60, H_AUDIO, H_AUTOFS,
     H_MUTE, H_FULLSCREEN, H_DISCONNECT, H_OPENLOG, H_FIREWALL_LINK, H_NAMEBOX, H_THEME_STRIP, H_ANDROID, H_USB_ACTION,
+    H_VOL_POPOVER, H_VOL_ICON, H_VOL_SLIDER,
     H_THEME = 100
 };
 
@@ -232,6 +233,11 @@ public:
     void activitySpinner(float cx, float cy, float r, uint32_t color);
     void drawBlurred(ID2D1Bitmap* bmp, D2D1_RECT_F dst, float blur, float opacity, D2D1_RECT_F* clip, float clipRadius);
     void addHit(int id, D2D1_RECT_F r);
+    // volume popover: themes draw it and register the slider track (x range used for dragging)
+    void volumeSlider(D2D1_RECT_F track);
+    void setVolumeFromX(float x);
+    void changeVolume(int delta);
+    void closeVolume() { volumeOpen_ = volumeDrag_ = false; }
     int hitTest(float x, float y);
     void layoutEdit(bool visible, D2D1_RECT_F r);
     // poster toolkit (also usable by other themes)
@@ -312,6 +318,9 @@ public:
     mn::ClientInfo client_;
     float airplayDb_ = 0.0f;
     bool muted_ = false;
+    bool volumeOpen_ = false, volumeDrag_ = false;
+    uint64_t volumeTouched_ = 0;
+    float volTrackL_ = 0, volTrackR_ = 1;
     std::wstring title_, artist_, album_;
     double progPos_ = 0, progDur_ = 0;
     uint64_t progStamp_ = 0;

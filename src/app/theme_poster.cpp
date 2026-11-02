@@ -40,6 +40,48 @@ void squareButton(App& a, int id, wchar_t g, float cx, float cy, float size, flo
     a.addHit(id, rc);
 }
 
+// Volume popover: [speaker = mute] [slider] [value], square and inked.
+void volumePopover(App& a, D2D1_RECT_F btn, bool onVideo, float al, float W, float H, bool below) {
+    const float pw = 264, ph = 46;
+    float bcx = (btn.left + btn.right) / 2;
+    // speaker right above / below the button; on the right edge, grow to the left
+    float left = bcx - ph / 2;
+    if (left + pw > W - 12) left = bcx + ph / 2 - pw;
+    left = std::max(12.0f, left);
+    float top = below ? btn.bottom + 8 : btn.top - 8 - ph;
+    top = std::max(8.0f, std::min(H - 8 - ph, top));
+    D2D1_RECT_F r = D2D1::RectF(left, top, left + pw, top + ph);
+    uint32_t bg = onVideo ? INK : PAPER, fg = onVideo ? WHITE : INK;
+    if (!onVideo) a.fillRect(D2D1::RectF(r.left + 4, r.top + 4, r.right + 4, r.bottom + 4), INK, al);  // hard offset shadow
+    a.fillRect(r, bg, al);
+    a.strokeRect(r, onVideo ? ACID : INK, al, 0, 1.5f);
+    a.addHit(H_VOL_POPOVER, r);
+    float cy = (r.top + r.bottom) / 2;
+    bool silent = a.muted_ || a.settings_.volume == 0;
+    float icx = r.left + ph / 2;
+    D2D1_RECT_F ib = D2D1::RectF(icx - 15, cy - 15, icx + 15, cy + 15);
+    bool hov = a.hover_ == H_VOL_ICON;
+    if (hov) a.fillRect(ib, ACID, al);
+    a.icon(silent ? G_MUTE : G_VOLUME, icx, cy, 14, hov ? INK : (a.muted_ ? ALERT : fg), al);
+    a.addHit(H_VOL_ICON, ib);
+
+    D2D1_RECT_F track = D2D1::RectF(r.left + ph + 4, cy - 3, r.right - 68, cy + 3);
+    float f = a.muted_ ? 0.0f : a.settings_.volume / 100.0f;
+    float kx = track.left + (track.right - track.left) * f;
+    a.strokeRect(track, fg, 0.9f * al, 0, 1.0f);
+    if (kx > track.left) a.fillRect(D2D1::RectF(track.left, track.top, kx, track.bottom), ACID, al);
+    bool active = a.hover_ == H_VOL_SLIDER || a.volumeDrag_;
+    float k = active ? 8.0f : 7.0f;
+    D2D1_RECT_F knob = D2D1::RectF(kx - k, cy - k, kx + k, cy + k);
+    a.fillRect(knob, active ? ACID : fg, al);
+    a.strokeRect(knob, INK, al, 0, 1.5f);
+    a.volumeSlider(track);
+
+    std::wstring val = a.muted_ ? L"OFF" : std::to_wstring(a.settings_.volume);
+    float vw = a.pixelTextWidth(val, 2.0f);
+    a.pixelText(val, r.right - 16 - vw, cy - 7, 2.0f, a.muted_ ? ALERT : fg, al);
+}
+
 void posterLink(App& a, int id, const std::wstring& s, float x, float y, bool alignRight) {
     IDWriteTextFormat* f = a.fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     float w = a.textWidth(s, f);
@@ -247,6 +289,7 @@ public:
         squareButton(a, H_MUTE, a.muted_ ? G_MUTE : G_VOLUME, cx + 18, y, 36, 1.0f, false, false);
         std::wstring st = !a.settings_.audio ? L"Sound is off in Settings" : (a.muted_ ? L"Muted" : L"Playing on this PC");
         a.text(st, D2D1::RectF(cx + 46, y - 12, cx + cw, y + 12), a.fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD), a.settings_.audio ? INK2 : ALERT);
+        if (a.volumeOpen_) volumePopover(a, D2D1::RectF(cx, y - 18, cx + 36, y + 18), false, 1.0f, W, H, false);
     }
 
     // ---------------------------------------------------------------- mirroring
@@ -287,7 +330,10 @@ public:
         squareButton(a, H_MUTE, a.muted_ ? G_MUTE : G_VOLUME, bx, 36, 38, al, false, true);
         bx -= 46;
         squareButton(a, H_SETTINGS, G_SETTINGS, bx, 36, 38, al, false, true);
-        (void)H;
+        if (a.volumeOpen_) {  // the controls are at the top: open downwards
+            float mx = W - 36 - 92;
+            volumePopover(a, D2D1::RectF(mx - 19, 17, mx + 19, 55), true, al, W, H, true);
+        }
     }
 
     void drawToast(App& a, float W, float H, const std::wstring& msg, float al) override {

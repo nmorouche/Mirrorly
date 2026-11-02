@@ -269,7 +269,13 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         uint64_t now = mn::now_ms();
         bool animate = false;
         bool inMirror = mirrorActive_ && !settingsOpen_;
-        float target = (inMirror && (now - lastMouseMove_ < 2500 || !haveFrame_ || hover_ != H_NONE)) ? 1.0f : 0.0f;
+        bool overVolume = hover_ == H_MUTE || hover_ == H_VOL_ICON || hover_ == H_VOL_SLIDER || hover_ == H_VOL_POPOVER;
+        if (volumeOpen_ && !volumeDrag_ && !overVolume && now - volumeTouched_ > 4000 && now - lastMouseMove_ > 1500) {
+            closeVolume();
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+        if (overVolume) volumeTouched_ = now;
+        float target = (inMirror && (now - lastMouseMove_ < 2500 || !haveFrame_ || hover_ != H_NONE || volumeOpen_)) ? 1.0f : 0.0f;
         if (inMirror && fabsf(target - overlayAlpha_) > 0.01f) {
             overlayAlpha_ += (target - overlayAlpha_) * 0.25f;
             animate = true;
@@ -307,6 +313,10 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         uint64_t now = mn::now_ms();
         if (mirrorActive_ && now - lastMouseMove_ > 100) InvalidateRect(hwnd_, nullptr, FALSE);
         lastMouseMove_ = now;
+        if (volumeDrag_) {
+            setVolumeFromX(x);
+            return 0;
+        }
         if (h != hover_) {
             hover_ = h;
             InvalidateRect(hwnd_, nullptr, FALSE);
@@ -326,12 +336,29 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         }
         break;
     case WM_LBUTTONDOWN:
+        if (volumeOpen_ && hover_ == H_VOL_SLIDER) {
+            volumeDrag_ = true;
+            SetCapture(hwnd_);
+            setVolumeFromX(GET_X_LPARAM(l) * 96.0f / dpi_);
+            return 0;
+        }
+        if (volumeOpen_ && hover_ != H_MUTE && hover_ != H_VOL_ICON && hover_ != H_VOL_POPOVER) {
+            closeVolume();  // a click anywhere else closes the volume popover
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
         pressed_ = hover_;
         if (GetFocus() == edit_ && pressed_ != H_NAMEBOX) SetFocus(hwnd_);
         SetCapture(hwnd_);
         return 0;
     case WM_LBUTTONUP: {
         ReleaseCapture();
+        if (volumeDrag_) {
+            volumeDrag_ = false;
+            settings_.save();
+            hover_ = hitTest(GET_X_LPARAM(l) * 96.0f / dpi_, GET_Y_LPARAM(l) * 96.0f / dpi_);
+            InvalidateRect(hwnd_, nullptr, FALSE);
+            return 0;
+        }
         int p = pressed_;
         pressed_ = H_NONE;
         if (p != H_NONE && p == hover_) click(p);
@@ -345,7 +372,13 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         else if (w == VK_ESCAPE) {
             if (fullscreen_) setFullscreen(false);
             else if (settingsOpen_) click(H_BACK);
-        } else if (w == 'M') click(H_MUTE);
+        } else if (w == 'M') {
+            click(H_VOL_ICON);
+            showToast(muted_ ? L"Sound muted" : L"Sound on");
+        } else if ((w == VK_UP || w == VK_DOWN) && (mirrorActive_ || audioActive_) && !settingsOpen_) {
+            changeVolume(w == VK_UP ? 5 : -5);
+            if (!volumeOpen_) showToast(L"Volume " + std::to_wstring(settings_.volume) + L"%");
+        }
         return 0;
     case WM_SYSKEYDOWN:
         if (w == VK_RETURN) {
@@ -369,6 +402,10 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         break;
     case WM_MOUSEWHEEL:
     case WM_MOUSEHWHEEL:
+        if (!settingsOpen_ && volumeOpen_ && m == WM_MOUSEWHEEL) {
+            changeVolume(GET_WHEEL_DELTA_WPARAM(w) > 0 ? 5 : -5);
+            return 0;
+        }
         if (settingsOpen_) {
             float d = GET_WHEEL_DELTA_WPARAM(w) / 120.0f;
             bool overStrip = hover_ == H_THEME_STRIP || hover_ >= H_THEME;
@@ -405,9 +442,13 @@ void App::click(int hit) {
         }
         break;
     case H_SETTINGS:
+        closeVolume();
         settingsOpen_ = true;
         settingsScroll_ = 0;
         SetWindowTextW(edit_, settings_.name.c_str());
+        break;
+    case H_VOL_POPOVER:
+    case H_VOL_SLIDER:
         break;
     case H_BACK:
         commitName();
@@ -432,10 +473,15 @@ void App::click(int hit) {
         settings_.autoFullscreen = !settings_.autoFullscreen;
         applySettings(false);
         break;
-    case H_MUTE:
+    case H_MUTE:  // the volume button opens / closes the volume popover
+        volumeOpen_ = !volumeOpen_;
+        volumeTouched_ = mn::now_ms();
+        break;
+    case H_VOL_ICON:
         muted_ = !muted_;
+        if (!muted_ && settings_.volume == 0) settings_.volume = 50;
         updateGain();
-        showToast(muted_ ? L"Sound muted" : L"Sound on");
+        volumeTouched_ = mn::now_ms();
         break;
     case H_FULLSCREEN:
         setFullscreen(!fullscreen_);
@@ -483,8 +529,31 @@ void App::commitName() {
 }
 
 void App::updateGain() {
-    float g = (muted_ || airplayDb_ <= -100.0f) ? 0.0f : powf(10.0f, airplayDb_ / 20.0f);
+    // the PC volume (squared, so the slider feels even) times the sender's own volume
+    float v = settings_.volume / 100.0f;
+    float g = (muted_ || airplayDb_ <= -100.0f) ? 0.0f : v * v * powf(10.0f, airplayDb_ / 20.0f);
     audio_.setGain(g);
+}
+
+void App::setVolumeFromX(float x) {
+    float f = (x - volTrackL_) / (volTrackR_ - volTrackL_);
+    int v = (int)lrintf(std::max(0.0f, std::min(1.0f, f)) * 100.0f);
+    if (v != settings_.volume || (muted_ && v > 0)) {
+        settings_.volume = v;
+        if (v > 0) muted_ = false;
+        updateGain();
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+    volumeTouched_ = mn::now_ms();
+}
+
+void App::changeVolume(int delta) {
+    settings_.volume = std::max(0, std::min(100, settings_.volume + delta));
+    if (delta > 0) muted_ = false;
+    updateGain();
+    settings_.save();
+    volumeTouched_ = mn::now_ms();
+    InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 void App::setFullscreen(bool fs) {
@@ -568,6 +637,7 @@ void App::handleEvent(Event* e) {
         updateGain();
         break;
     case EV_SESSION_END:
+        closeVolume();
         connecting_ = sessionActive_ = mirrorActive_ = audioActive_ = paused_ = haveFrame_ = false;
         audio_.stop();
         SafeRelease(video_);

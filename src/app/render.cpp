@@ -291,6 +291,13 @@ void App::addHit(int id, D2D1_RECT_F r) {
     hits_.push_back({id, r});
 }
 
+void App::volumeSlider(D2D1_RECT_F track) {
+    volTrackL_ = track.left;
+    volTrackR_ = std::max(track.left + 1, track.right);
+    float cy = (track.top + track.bottom) / 2;
+    addHit(H_VOL_SLIDER, D2D1::RectF(track.left - 8, cy - 14, track.right + 8, cy + 14));
+}
+
 int App::hitTest(float x, float y) {
     for (auto it = hits_.rbegin(); it != hits_.rend(); ++it) {
         auto& r = it->second;

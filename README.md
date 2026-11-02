@@ -22,7 +22,7 @@
 - **Themes**, picked at the bottom of Settings (the window and taskbar icon change with them):
   - **Default**: clean and quiet, follows Windows light/dark mode, frosted controls over the video
   - **Acid poster**: concrete-grey paper, giant acid-lime type, a cobalt block with pixel lettering, a halftone object and a live waveform
-- **Volume** follows the iPhone's volume buttons, with a mute button on the PC
+- **Volume** slider and mute on the PC, on top of the iPhone's own volume buttons
 
 Tested with an iPhone on iOS 27.2 and Windows 11.
 
@@ -64,6 +64,7 @@ iOS has no public way for a PC to receive the screen over USB, but AirPlay works
 | --- | --- |
 | Toggle full screen | Double-click, <kbd>F11</kbd> or <kbd>Alt</kbd>+<kbd>Enter</kbd> |
 | Leave full screen | <kbd>Esc</kbd> |
+| Volume | Click the speaker button: a slider opens (click its speaker to mute). <kbd>↑</kbd> / <kbd>↓</kbd>, or the mouse wheel while it is open |
 | Mute / unmute | <kbd>M</kbd> |
 | Disconnect | ✕ button in the overlay |
 
