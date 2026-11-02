@@ -86,8 +86,7 @@ void MirrorStream::stop() {
 }
 
 void MirrorStream::loop() {
-    decoder_ = mn_vdec_create(4);
-    if (!decoder_) LOGE("mirror: could not create H.264 decoder");
+    video_.reset(new VideoPublisher(rx_->frames(), rx_->listener(), "mirror"));
     sock_t client = MN_INVALID_SOCKET;
     uint8_t hdr[128];
     std::vector<uint8_t> payload;
@@ -173,10 +172,7 @@ void MirrorStream::loop() {
         // type 2 (heartbeat) and 5 (stream report) need no handling
     }
     sock_close(client);
-    if (decoder_) {
-        mn_vdec_destroy(decoder_);
-        decoder_ = nullptr;
-    }
+    video_.reset();
 }
 
 void MirrorStream::handleVideo(std::vector<uint8_t>& payload) {
@@ -203,33 +199,43 @@ void MirrorStream::handleVideo(std::vector<uint8_t>& payload) {
         combined.insert(combined.end(), spsPps_.begin(), spsPps_.end());
         combined.insert(combined.end(), payload.begin(), payload.end());
         spsPps_.clear();
-        decodeAndPublish(combined.data(), combined.size());
+        video_->decode(combined.data(), combined.size());
     } else {
-        decodeAndPublish(payload.data(), payload.size());
+        video_->decode(payload.data(), payload.size());
     }
 }
 
-void MirrorStream::decodeAndPublish(const uint8_t* annexb, size_t len) {
+VideoPublisher::VideoPublisher(FrameExchange& frames, ReceiverListener* listener, const char* tag)
+    : frames_(frames), listener_(listener), tag_(tag) {
+    decoder_ = mn_vdec_create(4);
+    if (!decoder_) LOGE("%s: could not create H.264 decoder", tag_);
+}
+
+VideoPublisher::~VideoPublisher() {
+    if (decoder_) mn_vdec_destroy(decoder_);
+}
+
+void VideoPublisher::decode(const uint8_t* annexb, size_t len) {
     if (!decoder_) return;
     int n = mn_vdec_decode(decoder_, annexb, (int)len);
     if (n <= 0) return;
     int w = 0, h = 0;
     if (mn_vdec_frame_size(decoder_, &w, &h) != 0 || w <= 0 || h <= 0) return;
-    VideoFrame& f = rx_->frames().beginWrite();
+    VideoFrame& f = frames_.beginWrite();
     f.width = w;
     f.height = h;
     f.stride = mn_vdec_stride_for(w);  // padded rows: see native_media.c
     f.pixels.resize((size_t)f.stride * h);
-    f.seq = ++frameSeq_;
+    f.seq = ++seq_;
     if (mn_vdec_frame_bgra(decoder_, f.pixels.data(), f.stride, w, h) != 0) return;
     if (w != lastW_ || h != lastH_) {
         lastW_ = w;
         lastH_ = h;
         char info[256];
-        if (mn_vdec_describe(decoder_, info, sizeof(info)) == 0) LOGI("mirror: %s", info);
+        if (mn_vdec_describe(decoder_, info, sizeof(info)) == 0) LOGI("%s: %s", tag_, info);
     }
-    rx_->frames().endWrite();
-    if (rx_->listener()) rx_->listener()->onVideoFrame();
+    frames_.endWrite();
+    if (listener_) listener_->onVideoFrame();
 }
 
 // ============================================================== Audio (RTP)

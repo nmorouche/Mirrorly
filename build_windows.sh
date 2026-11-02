@@ -1,6 +1,7 @@
 #!/bin/bash
 # Cross-compiles Mirrorly.exe (Windows x64) with MinGW-w64. FFmpeg is linked statically.
 # Optional: VERSION=1.2.3 ./build_windows.sh  (defaults to 1.0.0)
+# Wired Android mirroring needs deps/android (run ./fetch_android_deps.sh once).
 set -e
 cd "$(dirname "$0")"
 FF=${FF_WIN:-$(pwd)/deps/ffmpeg-win/install}
@@ -21,6 +22,17 @@ for f in src/core/*.cpp src/app/*.cpp; do
   o=$OUT/obj/$(basename $f .cpp).o
   $CXX -std=c++17 -Wall -Wno-unused-private-field -Wno-missing-field-initializers -municode $CFLAGS -c $f -o $o
 done
+ANDROID=${ANDROID_DEPS:-$(pwd)/deps/android}
+for f in adb.exe AdbWinApi.dll AdbWinUsbApi.dll scrcpy-server; do
+  [ -f "$ANDROID/$f" ] || { echo "missing $ANDROID/$f: run ./fetch_android_deps.sh"; exit 1; }
+done
+cat > $OUT/obj/android.rc <<RC
+200 RCDATA "$ANDROID/adb.exe"
+201 RCDATA "$ANDROID/AdbWinApi.dll"
+202 RCDATA "$ANDROID/AdbWinUsbApi.dll"
+210 RCDATA "$ANDROID/scrcpy-server"
+RC
+x86_64-w64-mingw32-windres $OUT/obj/android.rc -O coff -o $OUT/obj/android_res.o
 x86_64-w64-mingw32-windres "-DVER_STR=\\\"$VERSION\\\"" "-DVER_NUM=$VER_NUM" res/app.rc -O coff -o $OUT/obj/res.o
 $CXX -municode -mwindows -static -s -o $OUT/Mirrorly.exe $OUT/obj/*.o \
   -L$FF/lib -lswscale -lavcodec -lavutil \

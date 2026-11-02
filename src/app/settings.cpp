@@ -1,5 +1,7 @@
 #include "settings.h"
 
+#include <algorithm>
+
 #include "platform.h"
 #include <windows.h>
 #include <shlobj.h>
@@ -64,6 +66,8 @@ void Settings::load() {
     audio = readInt(L"Audio", 1) != 0;
     autoFullscreen = readInt(L"AutoFullscreen", 0) != 0;
     theme = readStr(L"Theme", L"default");
+    usbAndroid = readInt(L"AndroidUSB", 1) != 0;
+    volume = std::max(0, std::min(100, readInt(L"Volume", 100)));
 
     bool dirty = false;
     auto seedHex = mn::hex_decode(to_utf8(readStr(L"Key", L"")));
@@ -103,6 +107,8 @@ void Settings::save() const {
     writeStr(L"Audio", audio ? L"1" : L"0");
     writeStr(L"AutoFullscreen", autoFullscreen ? L"1" : L"0");
     writeStr(L"Theme", theme);
+    writeStr(L"AndroidUSB", usbAndroid ? L"1" : L"0");
+    writeStr(L"Volume", std::to_wstring(volume));
     writeStr(L"Key", from_utf8(mn::hex_encode(seed, 32)));
     writeStr(L"DeviceId", from_utf8(mn::hex_encode(deviceId, 6)));
     writeStr(L"Pi", from_utf8(pi));

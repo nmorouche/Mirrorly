@@ -291,6 +291,13 @@ void App::addHit(int id, D2D1_RECT_F r) {
     hits_.push_back({id, r});
 }
 
+void App::volumeSlider(D2D1_RECT_F track) {
+    volTrackL_ = track.left;
+    volTrackR_ = std::max(track.left + 1, track.right);
+    float cy = (track.top + track.bottom) / 2;
+    addHit(H_VOL_SLIDER, D2D1::RectF(track.left - 8, cy - 14, track.right + 8, cy + 14));
+}
+
 int App::hitTest(float x, float y) {
     for (auto it = hits_.rbegin(); it != hits_.rend(); ++it) {
         auto& r = it->second;
@@ -485,6 +492,56 @@ std::wstring App::primaryIp() const {
     return L"";
 }
 
+std::wstring App::wiredHint(std::wstring& action, bool& attention) const {
+    using mn::AndroidState;
+    action.clear();
+    attention = false;
+    std::wstring dev = from_utf8(usbStatus_.device);
+    if (dev.empty()) dev = L"your phone";
+    switch (usbStatus_.state) {
+    case AndroidState::Unauthorized:
+        attention = true;
+        return L"Tap “Allow” on your phone to mirror it over USB";
+    case AndroidState::Offline:
+        return L"Your phone is getting ready over USB…";
+    case AndroidState::Connecting:
+        return L"Connecting to " + dev + L" over USB…";
+    case AndroidState::Ready:
+        action = L"Mirror";
+        return dev + L" is plugged in";
+    case AndroidState::Failed:
+        attention = true;
+        action = L"Try again";
+        return L"Couldn't mirror " + dev + L" over USB";
+    case AndroidState::NoAdb:
+        if (iphoneUsb_) break;
+        attention = true;
+        return L"Mirroring Android phones over USB isn't available";
+    default:
+        break;
+    }
+    if (iphoneUsb_) return L"iPhone connected by cable: use Screen Mirroring";
+    if (usbStatus_.state == AndroidState::Off) return L"Or plug in your iPhone with Personal Hotspot on";
+    return L"Or plug in a phone: Android with USB debugging, iPhone with Personal Hotspot";
+}
+
+std::wstring App::androidSettingsText() const {
+    using mn::AndroidState;
+    std::wstring dev = from_utf8(usbStatus_.device);
+    if (dev.empty()) dev = L"The phone";
+    switch (usbStatus_.state) {
+    case AndroidState::Off: return L"Mirror an Android phone plugged in with a cable";
+    case AndroidState::NoAdb: return L"Not available: " + from_utf8(usbStatus_.detail);
+    case AndroidState::Unauthorized: return L"Tap “Allow” on the phone";
+    case AndroidState::Ready:
+    case AndroidState::Connecting:
+    case AndroidState::Offline: return dev + L" is plugged in";
+    case AndroidState::Mirroring: return dev + L" is mirroring";
+    case AndroidState::Failed: return L"Couldn't start: " + from_utf8(usbStatus_.detail);
+    default: return L"Turn on USB debugging on the phone, then plug it in";
+    }
+}
+
 std::wstring App::videoInfo() const {
     std::wstring s = haveFrame_ ? std::to_wstring(videoW_) + L" × " + std::to_wstring(videoH_) + L", " + std::to_wstring(fps_) + L" fps"
                                 : std::wstring(L"Waiting for video");
@@ -544,7 +601,7 @@ void App::drawSettings(float W, float H) {
     D2D1_RECT_F g = D2D1::RectF(x0, y, x1, y + rowH);
     t.group(*this, g, 1, rowH);
     float cy = g.top + rowH / 2;
-    t.rowText(*this, lx0, lx1 - 280, cy, L"Name", L"How this PC appears on your iPhone");
+    t.rowText(*this, lx0, lx1 - 280, cy, L"Name", L"How this PC appears on your devices");
     D2D1_RECT_F box = D2D1::RectF(lx1 - 260, cy - 15, lx1, cy + 15);
     D2D1_RECT_F editArea = t.textField(*this, box, GetFocus() == edit_, hover_ == H_NAMEBOX);
     addHit(H_NAMEBOX, box);
@@ -556,7 +613,7 @@ void App::drawSettings(float W, float H) {
     g = D2D1::RectF(x0, y, x1, y + rowH * 3);
     t.group(*this, g, 3, rowH);
     cy = g.top + rowH / 2;
-    t.rowText(*this, lx0, lx1 - 270, cy, L"Resolution", L"The sharpest picture your iPhone will send");
+    t.rowText(*this, lx0, lx1 - 270, cy, L"Resolution", L"The sharpest picture your phone will send");
     t.choices(*this, {{H_RES0, L"720p"}, {H_RES1, L"1080p"}, {H_RES2, L"1440p"}, {H_RES3, L"4K"}}, H_RES0 + settings_.resolution, lx1, cy);
     cy += rowH;
     t.rowText(*this, lx0, lx1 - 150, cy, L"Frame rate", L"60 is smoother, 30 uses less Wi-Fi");
@@ -571,11 +628,25 @@ void App::drawSettings(float W, float H) {
     g = D2D1::RectF(x0, y, x1, y + rowH * 2);
     t.group(*this, g, 2, rowH);
     cy = g.top + rowH / 2;
-    t.rowText(*this, lx0, lx1 - 70, cy, L"Play sound", L"Sound from your iPhone plays on this PC");
+    t.rowText(*this, lx0, lx1 - 70, cy, L"Play sound", L"Sound from your phone plays on this PC");
     t.toggle(*this, H_AUDIO, settings_.audio, lx1, cy);
     cy += rowH;
     t.rowText(*this, lx0, lx1 - 140, cy, L"Windows Firewall", L"Fixes it when your iPhone can't find this PC");
     t.button(*this, H_FIREWALL, L"Allow", G_SHIELD, lx1, cy);
+    y = g.bottom + gap;
+
+    // ---- Cable
+    y = t.sectionTitle(*this, x0, x1, y, L"Cable (USB)");
+    g = D2D1::RectF(x0, y, x1, y + rowH * 2);
+    t.group(*this, g, 2, rowH);
+    cy = g.top + rowH / 2;
+    std::wstring androidDesc = androidSettingsText();
+    t.rowText(*this, lx0, lx1 - 70, cy, L"Android phones", androidDesc.c_str());
+    t.toggle(*this, H_ANDROID, settings_.usbAndroid, lx1, cy);
+    cy += rowH;
+    t.rowText(*this, lx0, lx1, cy, L"iPhone",
+              iphoneUsb_ ? L"Connected by cable: use Screen Mirroring on the iPhone"
+                         : L"Turn on Personal Hotspot on the iPhone, then plug it in");
     y = g.bottom + gap;
 
     // ---- Theme picker: a horizontal strip, one card per registered theme

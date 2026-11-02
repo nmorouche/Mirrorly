@@ -33,6 +33,9 @@ jobs:
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
         run: ./build_ffmpeg.sh win
 
+      - name: Download the Android USB tools (checksums verified)
+        run: ./fetch_android_deps.sh
+
       - name: Build Mirrorly.exe
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="0.0.0"; fi
@@ -55,7 +58,7 @@ jobs:
           cat > notes.md <<NOTES
           ## Mirrorly ${GITHUB_REF_NAME}
 
-          AirPlay receiver for Windows: mirror your iPhone or iPad screen to your PC, with sound.
+          Mirror your iPhone, iPad or Android phone to your Windows PC, with sound: over Wi-Fi (AirPlay) or with a USB cable.
 
           ### Download
           **Mirrorly.exe** below is portable: download it and run it. Nothing to install.
@@ -64,6 +67,8 @@ jobs:
           1. When Windows Defender Firewall asks, click **Allow** (tick *Private* and *Public*).
           2. Connect the iPhone and the PC to the same network.
           3. On the iPhone: **Control Center → Screen Mirroring →** choose your PC.
+
+          Android (USB): turn on **USB debugging** on the phone (Developer options), plug it in and tap **Allow**.
 
           Windows 10/11, 64-bit. SHA-256 checksum: \`Mirrorly.exe.sha256\`.
           NOTES

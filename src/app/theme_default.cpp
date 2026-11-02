@@ -55,6 +55,48 @@ void frosted(App& a, D2D1_RECT_F r, float rad, D2D1_RECT_F video, float al) {
     hairlineBorder(a, r, rad, 0xFFFFFF, 0.14f * al);
 }
 
+// Volume popover: [speaker = mute] [slider] [value]. The speaker sits right above (or below)
+// the volume button that opened it.
+void volumePopover(App& a, D2D1_RECT_F btn, bool onVideo, D2D1_RECT_F video, float al, float W, float H, bool below) {
+    const Pal& p = onVideo ? DARK : pal(a);
+    const float pw = 252, ph = 48;
+    float bcx = (btn.left + btn.right) / 2;
+    float left = std::max(12.0f, std::min(W - 12 - pw, bcx - ph / 2));
+    float top = below ? btn.bottom + 10 : btn.top - 10 - ph;
+    top = std::max(8.0f, std::min(H - 8 - ph, top));
+    D2D1_RECT_F r = D2D1::RectF(left, top, left + pw, top + ph);
+    if (onVideo) {
+        frosted(a, r, ph / 2, video, al);
+    } else {
+        a.softShadow(r, ph / 2, p.dark ? 0.5f : 0.18f, 14, 5);
+        roundFill(a, r, ph / 2, p.card);
+        hairlineBorder(a, r, ph / 2, p.sep, p.borderA);
+    }
+    a.addHit(H_VOL_POPOVER, r);
+    float cy = (r.top + r.bottom) / 2;
+    uint32_t fg = onVideo ? 0xFFFFFF : p.text;
+    bool silent = a.muted_ || a.settings_.volume == 0;
+    circleButton(a, H_VOL_ICON, silent ? G_MUTE : G_VOLUME, r.left + ph / 2, cy, 36, a.muted_ ? p.red : fg, fg,
+                 onVideo ? 0.16f : 0.08f, al);
+
+    D2D1_RECT_F track = D2D1::RectF(r.left + ph, cy - 2, r.right - 54, cy + 2);
+    float f = a.muted_ ? 0.0f : a.settings_.volume / 100.0f;
+    float kx = track.left + (track.right - track.left) * f;
+    roundFill(a, track, 2, fg, (onVideo ? 0.28f : 0.14f) * al);
+    if (kx > track.left) roundFill(a, D2D1::RectF(track.left, track.top, kx, track.bottom), 2, onVideo ? 0xFFFFFF : p.accent, al);
+    bool active = a.hover_ == H_VOL_SLIDER || a.volumeDrag_;
+    float kr = active ? 9.0f : 8.0f;
+    a.dot(kx, cy + 1, kr + 1, 0x000000, 0.22f * al);
+    a.dot(kx, cy, kr, 0xFFFFFF, al);
+    if (!onVideo) a.strokeRect(D2D1::RectF(kx - kr, cy - kr, kx + kr, cy + kr), p.sep, 0.9f * al, kr, 1.0f);
+    a.volumeSlider(track);
+
+    std::wstring val = a.muted_ ? L"Off" : std::to_wstring(a.settings_.volume);
+    a.text(val, D2D1::RectF(r.right - 50, cy - 10, r.right - 16, cy + 10),
+           a.fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_TRAILING), fg, (a.muted_ ? 0.6f : 0.9f) * al);
+}
+
+
 std::wstring fmtTime(double s) {
     int v = (int)s;
     wchar_t b[16];
@@ -144,7 +186,28 @@ public:
             a.text(steps[i], D2D1::RectF(card.left + 50, ry - 11, card.right - 16, ry + 11), a.fmt(14), p.text);
             if (i > 0) a.line(card.left + 50, card.top + rowH * i, card.right, card.top + rowH * i, p.sep, p.sepA, 1.0f);
         }
-        y = card.bottom + 24;
+        y = card.bottom + 26;
+
+        // cable (USB) line
+        std::wstring action;
+        bool attention = false;
+        std::wstring wired = a.wiredHint(action, attention);
+        if (!wired.empty()) {
+            IDWriteTextFormat* wf = a.fmt(13);
+            IDWriteTextFormat* af = a.fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+            float tw = std::min(a.textWidth(wired, wf), W - 140), aw = action.empty() ? 0 : a.textWidth(action, af) + 14;
+            float x = cx - (22 + tw + aw) / 2;
+            a.icon(G_USB, x + 8, y, 15, attention ? p.orange : p.text2);
+            a.text(wired, D2D1::RectF(x + 22, y - 10, x + 22 + tw + 2, y + 10), wf, attention ? p.text : p.text2);
+            if (!action.empty()) {
+                D2D1_RECT_F ar = D2D1::RectF(x + 22 + tw + 14, y - 10, x + 22 + tw + aw + 2, y + 10);
+                bool hov = a.hover_ == H_USB_ACTION;
+                a.text(action, ar, af, hov ? p.accentHover : p.accent);
+                if (hov) a.line(ar.left, ar.bottom - 1, ar.right - 2, ar.bottom - 1, p.accentHover, 1.0f, 1.0f);
+                a.addHit(H_USB_ACTION, D2D1::RectF(ar.left - 6, ar.top - 4, ar.right + 6, ar.bottom + 4));
+            }
+            y += 34;
+        }
 
         // footer
         std::wstring ip = a.primaryIp();
@@ -225,6 +288,8 @@ public:
         if (!a.settings_.audio)
             a.text(L"Sound is turned off in Settings", D2D1::RectF(0, y + 30, W, y + 48),
                    a.fmt(12, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER), p.orange);
+        if (a.volumeOpen_)
+            volumePopover(a, D2D1::RectF(cx - 19, y + 6 - 19, cx + 19, y + 6 + 19), false, D2D1::RectF(), 1.0f, W, H, false);
     }
 
     // ---------------------------------------------------------------- mirroring
@@ -284,6 +349,10 @@ public:
         bx += 5 + bd / 2;
         bool hov = a.hover_ == H_DISCONNECT;
         circleButton(a, H_DISCONNECT, G_CLOSE, bx, bcy, bd, hov ? 0xFFFFFF : DARK.red, DARK.red, 0.9f, al);
+        if (a.volumeOpen_) {
+            float mx = bar.left + padd + bd / 2;
+            volumePopover(a, D2D1::RectF(mx - bd / 2, bar.top, mx + bd / 2, bar.bottom), true, video, al, W, H, false);
+        }
         (void)p;
     }
 

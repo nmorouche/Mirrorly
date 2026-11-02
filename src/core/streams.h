@@ -14,6 +14,23 @@
 
 namespace mn {
 
+// Decodes Annex-B H.264 and publishes BGRA frames to the receiver's frame exchange.
+// Shared by AirPlay mirroring and wired Android mirroring.
+class VideoPublisher {
+public:
+    VideoPublisher(FrameExchange& frames, ReceiverListener* listener, const char* tag);
+    ~VideoPublisher();
+    bool ok() const { return decoder_ != nullptr; }
+    void decode(const uint8_t* annexb, size_t len);
+private:
+    FrameExchange& frames_;
+    ReceiverListener* listener_;
+    const char* tag_;
+    void* decoder_ = nullptr;
+    uint64_t seq_ = 0;
+    int lastW_ = 0, lastH_ = 0;
+};
+
 // Sends NTP timing requests to the sender's timing port (AirPlay legacy timing protocol).
 class NtpClient {
 public:
@@ -42,7 +59,6 @@ public:
 private:
     void loop();
     void handleVideo(std::vector<uint8_t>& payload);
-    void decodeAndPublish(const uint8_t* annexb, size_t len);
     Receiver* rx_;
     sock_t listenSock_ = MN_INVALID_SOCKET;
     uint16_t port_ = 0;
@@ -50,11 +66,9 @@ private:
     std::thread thread_;
     AesCtr ctr_;
     std::vector<uint8_t> spsPps_;  // Annex-B SPS+PPS waiting to be prepended
-    void* decoder_ = nullptr;
+    std::unique_ptr<VideoPublisher> video_;
     bool paused_ = false;
     std::atomic<uint64_t> lastData_{0};
-    uint64_t frameSeq_ = 0;
-    int lastW_ = 0, lastH_ = 0;
 };
 
 class AudioStream {

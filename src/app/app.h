@@ -26,6 +26,7 @@
 #include <utility>
 #include <vector>
 
+#include "android_mirror.h"
 #include "audio_out.h"
 #include "receiver.h"
 #include "settings.h"
@@ -50,12 +51,12 @@ static inline D2D1_COLOR_F rgb(uint32_t c, float a = 1.0f) {
 // icon glyphs (Segoe Fluent Icons / Segoe MDL2 Assets)
 static const wchar_t G_SETTINGS = 0xE713, G_BACK = 0xE72B, G_CLOSE = 0xE711, G_FULL = 0xE740, G_WINDOW = 0xE73F,
                      G_VOLUME = 0xE767, G_MUTE = 0xE74F, G_MUSIC = 0xE8D6, G_SHIELD = 0xEA18, G_LOCK = 0xE72E,
-                     G_CHECK = 0xE73E;
+                     G_CHECK = 0xE73E, G_USB = 0xE88E;
 
 // ------------------------------------------------------------------ events from the engine
 enum EvType {
     EV_CONNECTING, EV_SESSION_START, EV_SESSION_END, EV_MIRROR_START, EV_MIRROR_STOP, EV_PAUSED, EV_AUDIO_START,
-    EV_AUDIO_STOP, EV_VOLUME, EV_METADATA, EV_ARTWORK, EV_PROGRESS, EV_FIREWALL_DONE
+    EV_AUDIO_STOP, EV_VOLUME, EV_METADATA, EV_ARTWORK, EV_PROGRESS, EV_FIREWALL_DONE, EV_ANDROID_STATUS
 };
 struct Event {
     EvType type;
@@ -65,12 +66,14 @@ struct Event {
     std::string s1, s2, s3;
     std::vector<uint8_t> data;
     double d1 = 0, d2 = 0;
+    int i = 0;
 };
 
 // clickable things. Theme cards use H_THEME + index.
 enum Hit {
     H_NONE, H_SETTINGS, H_BACK, H_FIREWALL, H_RES0, H_RES1, H_RES2, H_RES3, H_FPS30, H_FPS60, H_AUDIO, H_AUTOFS,
-    H_MUTE, H_FULLSCREEN, H_DISCONNECT, H_OPENLOG, H_FIREWALL_LINK, H_NAMEBOX, H_THEME_STRIP,
+    H_MUTE, H_FULLSCREEN, H_DISCONNECT, H_OPENLOG, H_FIREWALL_LINK, H_NAMEBOX, H_THEME_STRIP, H_ANDROID, H_USB_ACTION,
+    H_VOL_POPOVER, H_VOL_ICON, H_VOL_SLIDER,
     H_THEME = 100
 };
 
@@ -135,7 +138,7 @@ Theme* findTheme(const std::wstring& id);
 
 // ------------------------------------------------------------------ the application
 // Members are public: themes draw with the toolkit below and read the session state.
-class App : public mn::ReceiverListener {
+class App : public mn::ReceiverListener, public mn::AndroidStatusListener {
 public:
     bool init(HINSTANCE inst, int show);
     int run();
@@ -162,6 +165,10 @@ public:
     }
     void onArtwork(const std::vector<uint8_t>& img) override { post(EV_ARTWORK, [&](Event& e) { e.data = img; }); }
     void onProgress(double pos, double dur) override { post(EV_PROGRESS, [&](Event& e) { e.d1 = pos; e.d2 = dur; }); }
+    // AndroidStatusListener (engine threads)
+    void onAndroidStatus(const mn::AndroidStatus& s) override {
+        post(EV_ANDROID_STATUS, [&](Event& e) { e.i = (int)s.state; e.s1 = s.device; e.s2 = s.detail; });
+    }
 
     static App* instance;
 
@@ -194,6 +201,13 @@ public:
     void allowFirewall();
     void showToast(const std::wstring& msg);
     void openLog();
+    // wired mirroring (android_usb.cpp)
+    void startAndroid();
+    mn::AndroidConfig androidConfig() const;
+    bool launchAdb();
+    void stopAdb();
+    void checkUsbIphone();
+    bool clientIsUsb() const { return client_.ip == "USB"; }
 
     // ---- rendering (render.cpp)
     bool createDeviceResources();
@@ -219,6 +233,11 @@ public:
     void activitySpinner(float cx, float cy, float r, uint32_t color);
     void drawBlurred(ID2D1Bitmap* bmp, D2D1_RECT_F dst, float blur, float opacity, D2D1_RECT_F* clip, float clipRadius);
     void addHit(int id, D2D1_RECT_F r);
+    // volume popover: themes draw it and register the slider track (x range used for dragging)
+    void volumeSlider(D2D1_RECT_F track);
+    void setVolumeFromX(float x);
+    void changeVolume(int delta);
+    void closeVolume() { volumeOpen_ = volumeDrag_ = false; }
     int hitTest(float x, float y);
     void layoutEdit(bool visible, D2D1_RECT_F r);
     // poster toolkit (also usable by other themes)
@@ -234,6 +253,9 @@ public:
     std::wstring clientName() const;
     std::wstring primaryIp() const;
     std::wstring videoInfo() const;
+    // one line about cable connections for the home screen; action = button label (may be empty)
+    std::wstring wiredHint(std::wstring& action, bool& attention) const;
+    std::wstring androidSettingsText() const;
 
     // ---- state
     HINSTANCE inst_ = nullptr;
@@ -283,6 +305,12 @@ public:
     Settings settings_;
     mn::Receiver rx_;
     AudioOut audio_;
+    int audioRate_ = 44100;
+    mn::AndroidMirror android_{rx_};
+    mn::AndroidStatus usbStatus_;
+    bool iphoneUsb_ = false;        // an iPhone shares its connection over USB (Personal Hotspot)
+    uint64_t ifaceCheck_ = 0;
+    std::atomic<bool> startedAdb_{false};
     std::atomic<bool> audioEnabled_{true};
     std::atomic<bool> framePosted_{false};
     bool connecting_ = false, sessionActive_ = false, mirrorActive_ = false, audioActive_ = false, paused_ = false;
@@ -290,6 +318,9 @@ public:
     mn::ClientInfo client_;
     float airplayDb_ = 0.0f;
     bool muted_ = false;
+    bool volumeOpen_ = false, volumeDrag_ = false;
+    uint64_t volumeTouched_ = 0;
+    float volTrackL_ = 0, volTrackR_ = 1;
     std::wstring title_, artist_, album_;
     double progPos_ = 0, progDur_ = 0;
     uint64_t progStamp_ = 0;

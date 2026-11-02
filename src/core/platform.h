@@ -46,6 +46,8 @@ bool sock_send_all(sock_t s, const uint8_t* buf, size_t len);
 
 // Creates a listening TCP socket bound to 0.0.0.0:port (port 0 = ephemeral). Returns actual port.
 sock_t tcp_listen(uint16_t port, uint16_t* actual_port);
+// Connects to ip_be:port with a timeout. Returns an invalid socket on failure.
+sock_t tcp_connect(uint32_t ip_be, uint16_t port, int timeout_ms);
 // Creates a UDP socket bound to 0.0.0.0:port (0 = ephemeral). Returns actual port.
 sock_t udp_bind(uint16_t port, uint16_t* actual_port);
 // Windows: stop ICMP 'port unreachable' from turning into recvfrom errors on UDP sockets.
@@ -53,6 +55,7 @@ void udp_disable_connreset(sock_t s);
 
 struct NetInterface {
     std::string name;
+    std::string description;  // adapter description (Windows), e.g. "Apple Mobile Device Ethernet"
     uint32_t addr;     // network byte order
     uint32_t netmask;  // network byte order
     uint8_t mac[6];

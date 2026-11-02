@@ -111,6 +111,8 @@ bool App::init(HINSTANCE inst, int show) {
     UpdateWindow(hwnd_);
     SetTimer(hwnd_, 1, 33, nullptr);
     startReceiver();
+    startAndroid();
+    checkUsbIphone();
     return true;
 }
 
@@ -181,6 +183,7 @@ void App::applySettings(bool reannounce) {
     cfg.audioEnabled = settings_.audio;
     if (reannounce) rx_.updateConfig(cfg);
     else rx_.updateConfig(cfg);
+    android_.updateConfig(androidConfig());
 }
 
 int App::run() {
@@ -189,6 +192,8 @@ int App::run() {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+    android_.stop();
+    stopAdb();
     rx_.stop();
     audio_.stop();
     if (logFile_) {
@@ -264,7 +269,13 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         uint64_t now = mn::now_ms();
         bool animate = false;
         bool inMirror = mirrorActive_ && !settingsOpen_;
-        float target = (inMirror && (now - lastMouseMove_ < 2500 || !haveFrame_ || hover_ != H_NONE)) ? 1.0f : 0.0f;
+        bool overVolume = hover_ == H_MUTE || hover_ == H_VOL_ICON || hover_ == H_VOL_SLIDER || hover_ == H_VOL_POPOVER;
+        if (volumeOpen_ && !volumeDrag_ && !overVolume && now - volumeTouched_ > 4000 && now - lastMouseMove_ > 1500) {
+            closeVolume();
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+        if (overVolume) volumeTouched_ = now;
+        float target = (inMirror && (now - lastMouseMove_ < 2500 || !haveFrame_ || hover_ != H_NONE || volumeOpen_)) ? 1.0f : 0.0f;
         if (inMirror && fabsf(target - overlayAlpha_) > 0.01f) {
             overlayAlpha_ += (target - overlayAlpha_) * 0.25f;
             animate = true;
@@ -278,6 +289,10 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         }
         if (!inMirror || !haveFrame_ || paused_) animate = true;  // home pulse, spinners, progress
         if (toastUntil_ && now < toastUntil_ + 400) animate = true;
+        if (now - ifaceCheck_ >= 2000) {
+            ifaceCheck_ = now;
+            checkUsbIphone();
+        }
         if (now - fpsStamp_ >= 1000) {
             fps_ = fpsCount_;
             fpsCount_ = 0;
@@ -298,6 +313,10 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         uint64_t now = mn::now_ms();
         if (mirrorActive_ && now - lastMouseMove_ > 100) InvalidateRect(hwnd_, nullptr, FALSE);
         lastMouseMove_ = now;
+        if (volumeDrag_) {
+            setVolumeFromX(x);
+            return 0;
+        }
         if (h != hover_) {
             hover_ = h;
             InvalidateRect(hwnd_, nullptr, FALSE);
@@ -317,12 +336,29 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         }
         break;
     case WM_LBUTTONDOWN:
+        if (volumeOpen_ && hover_ == H_VOL_SLIDER) {
+            volumeDrag_ = true;
+            SetCapture(hwnd_);
+            setVolumeFromX(GET_X_LPARAM(l) * 96.0f / dpi_);
+            return 0;
+        }
+        if (volumeOpen_ && hover_ != H_MUTE && hover_ != H_VOL_ICON && hover_ != H_VOL_POPOVER) {
+            closeVolume();  // a click anywhere else closes the volume popover
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
         pressed_ = hover_;
         if (GetFocus() == edit_ && pressed_ != H_NAMEBOX) SetFocus(hwnd_);
         SetCapture(hwnd_);
         return 0;
     case WM_LBUTTONUP: {
         ReleaseCapture();
+        if (volumeDrag_) {
+            volumeDrag_ = false;
+            settings_.save();
+            hover_ = hitTest(GET_X_LPARAM(l) * 96.0f / dpi_, GET_Y_LPARAM(l) * 96.0f / dpi_);
+            InvalidateRect(hwnd_, nullptr, FALSE);
+            return 0;
+        }
         int p = pressed_;
         pressed_ = H_NONE;
         if (p != H_NONE && p == hover_) click(p);
@@ -336,7 +372,13 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         else if (w == VK_ESCAPE) {
             if (fullscreen_) setFullscreen(false);
             else if (settingsOpen_) click(H_BACK);
-        } else if (w == 'M') click(H_MUTE);
+        } else if (w == 'M') {
+            click(H_VOL_ICON);
+            showToast(muted_ ? L"Sound muted" : L"Sound on");
+        } else if ((w == VK_UP || w == VK_DOWN) && (mirrorActive_ || audioActive_) && !settingsOpen_) {
+            changeVolume(w == VK_UP ? 5 : -5);
+            if (!volumeOpen_) showToast(L"Volume " + std::to_wstring(settings_.volume) + L"%");
+        }
         return 0;
     case WM_SYSKEYDOWN:
         if (w == VK_RETURN) {
@@ -360,6 +402,10 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         break;
     case WM_MOUSEWHEEL:
     case WM_MOUSEHWHEEL:
+        if (!settingsOpen_ && volumeOpen_ && m == WM_MOUSEWHEEL) {
+            changeVolume(GET_WHEEL_DELTA_WPARAM(w) > 0 ? 5 : -5);
+            return 0;
+        }
         if (settingsOpen_) {
             float d = GET_WHEEL_DELTA_WPARAM(w) / 120.0f;
             bool overStrip = hover_ == H_THEME_STRIP || hover_ >= H_THEME;
@@ -396,9 +442,13 @@ void App::click(int hit) {
         }
         break;
     case H_SETTINGS:
+        closeVolume();
         settingsOpen_ = true;
         settingsScroll_ = 0;
         SetWindowTextW(edit_, settings_.name.c_str());
+        break;
+    case H_VOL_POPOVER:
+    case H_VOL_SLIDER:
         break;
     case H_BACK:
         commitName();
@@ -416,23 +466,36 @@ void App::click(int hit) {
     case H_AUDIO:
         settings_.audio = !settings_.audio;
         applySettings(false);
-        if (settings_.audio && audioActive_) audio_.start();
+        if (settings_.audio && audioActive_) audio_.start(audioRate_);
         if (!settings_.audio) audio_.stop();
         break;
     case H_AUTOFS:
         settings_.autoFullscreen = !settings_.autoFullscreen;
         applySettings(false);
         break;
-    case H_MUTE:
+    case H_MUTE:  // the volume button opens / closes the volume popover
+        volumeOpen_ = !volumeOpen_;
+        volumeTouched_ = mn::now_ms();
+        break;
+    case H_VOL_ICON:
         muted_ = !muted_;
+        if (!muted_ && settings_.volume == 0) settings_.volume = 50;
         updateGain();
-        showToast(muted_ ? L"Sound muted" : L"Sound on");
+        volumeTouched_ = mn::now_ms();
         break;
     case H_FULLSCREEN:
         setFullscreen(!fullscreen_);
         break;
     case H_DISCONNECT:
-        rx_.disconnectClient();
+        if (clientIsUsb()) android_.disconnect();
+        else rx_.disconnectClient();
+        break;
+    case H_ANDROID:
+        settings_.usbAndroid = !settings_.usbAndroid;
+        applySettings(false);
+        break;
+    case H_USB_ACTION:
+        android_.mirrorAgain();
         break;
     case H_FIREWALL:
     case H_FIREWALL_LINK:
@@ -466,8 +529,31 @@ void App::commitName() {
 }
 
 void App::updateGain() {
-    float g = (muted_ || airplayDb_ <= -100.0f) ? 0.0f : powf(10.0f, airplayDb_ / 20.0f);
+    // the PC volume (squared, so the slider feels even) times the sender's own volume
+    float v = settings_.volume / 100.0f;
+    float g = (muted_ || airplayDb_ <= -100.0f) ? 0.0f : v * v * powf(10.0f, airplayDb_ / 20.0f);
     audio_.setGain(g);
+}
+
+void App::setVolumeFromX(float x) {
+    float f = (x - volTrackL_) / (volTrackR_ - volTrackL_);
+    int v = (int)lrintf(std::max(0.0f, std::min(1.0f, f)) * 100.0f);
+    if (v != settings_.volume || (muted_ && v > 0)) {
+        settings_.volume = v;
+        if (v > 0) muted_ = false;
+        updateGain();
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+    volumeTouched_ = mn::now_ms();
+}
+
+void App::changeVolume(int delta) {
+    settings_.volume = std::max(0, std::min(100, settings_.volume + delta));
+    if (delta > 0) muted_ = false;
+    updateGain();
+    settings_.save();
+    volumeTouched_ = mn::now_ms();
+    InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 void App::setFullscreen(bool fs) {
@@ -551,6 +637,7 @@ void App::handleEvent(Event* e) {
         updateGain();
         break;
     case EV_SESSION_END:
+        closeVolume();
         connecting_ = sessionActive_ = mirrorActive_ = audioActive_ = paused_ = haveFrame_ = false;
         audio_.stop();
         SafeRelease(video_);
@@ -577,7 +664,8 @@ void App::handleEvent(Event* e) {
         break;
     case EV_AUDIO_START:
         audioActive_ = true;
-        if (settings_.audio) audio_.start();
+        audioRate_ = (int)e->f == mn::kAudioPcm48k ? 48000 : 44100;
+        if (settings_.audio) audio_.start(audioRate_);
         updateGain();
         break;
     case EV_AUDIO_STOP:
@@ -602,6 +690,18 @@ void App::handleEvent(Event* e) {
         progDur_ = e->d2;
         progStamp_ = mn::now_ms();
         break;
+    case EV_ANDROID_STATUS: {
+        mn::AndroidState prev = usbStatus_.state;
+        usbStatus_.state = (mn::AndroidState)e->i;
+        usbStatus_.device = e->s1;
+        usbStatus_.detail = e->s2;
+        mn::logf(mn::LogLevel::Debug, "android: status %d", e->i);
+        if (usbStatus_.state == mn::AndroidState::Unauthorized && prev != usbStatus_.state)
+            showToast(L"Tap “Allow” on your phone to mirror it over USB");
+        else if (usbStatus_.state == mn::AndroidState::Failed && prev != usbStatus_.state)
+            showToast(L"Couldn't mirror " + (e->s1.empty() ? std::wstring(L"the phone") : from_utf8(e->s1)) + L" over USB");
+        break;
+    }
     case EV_FIREWALL_DONE:
         showToast(e->b ? L"Windows Firewall now allows Mirrorly" : L"Firewall rules could not be changed");
         break;

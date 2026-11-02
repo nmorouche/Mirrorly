@@ -1,6 +1,7 @@
 // Mirrorly - AirPlay screen mirroring + audio receiver engine
 #pragma once
 #include <atomic>
+#include <functional>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -103,6 +104,12 @@ public:
     ReceiverConfig config();
 
     void disconnectClient();          // drops the current sender
+    // Called when an AirPlay sender starts a session, before it takes the screen
+    // (lets another source, e.g. a USB phone, step aside).
+    void setPreemptHook(std::function<void()> hook) {
+        std::lock_guard<std::mutex> lk(hookMutex_);
+        preempt_ = hook;
+    }
     FrameExchange& frames() { return frames_; }
     uint16_t port() const { return port_; }
     std::string publicKeyHex() const;
@@ -141,6 +148,8 @@ private:
     Connection* sessionOwner_ = nullptr;
     FrameExchange frames_;
     std::string error_;
+    std::mutex hookMutex_;
+    std::function<void()> preempt_;
 };
 
 }  // namespace mn
