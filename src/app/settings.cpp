@@ -63,6 +63,7 @@ void Settings::load() {
     fps = readInt(L"Fps", 60) == 30 ? 30 : 60;
     audio = readInt(L"Audio", 1) != 0;
     autoFullscreen = readInt(L"AutoFullscreen", 0) != 0;
+    theme = readStr(L"Theme", L"default");
 
     bool dirty = false;
     auto seedHex = mn::hex_decode(to_utf8(readStr(L"Key", L"")));
@@ -101,6 +102,7 @@ void Settings::save() const {
     writeStr(L"Fps", std::to_wstring(fps));
     writeStr(L"Audio", audio ? L"1" : L"0");
     writeStr(L"AutoFullscreen", autoFullscreen ? L"1" : L"0");
+    writeStr(L"Theme", theme);
     writeStr(L"Key", from_utf8(mn::hex_encode(seed, 32)));
     writeStr(L"DeviceId", from_utf8(mn::hex_encode(deviceId, 6)));
     writeStr(L"Pi", from_utf8(pi));

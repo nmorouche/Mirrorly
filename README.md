@@ -16,7 +16,9 @@
 - **Audio**, both while mirroring and for music-only AirPlay (ALAC, AAC, AAC-ELD)
 - **Now Playing** view with artwork, title, artist and progress when streaming music
 - **Portable**: a single `Mirrorly.exe` (about 4.5 MB) with no installer, runtime, Bonjour or iTunes needed
-- **Clean interface**: dark theme, full screen, controls that hide while you watch, sharp on high-DPI screens
+- **Themes**, picked at the bottom of Settings (the window and taskbar icon change with them):
+  - **Default**: clean and quiet, follows Windows light/dark mode, frosted controls over the video
+  - **Acid poster**: concrete-grey paper, giant acid-lime type, a cobalt block with pixel lettering, a halftone object and a live waveform
 - **Volume** follows the iPhone's volume buttons, with a mute button on the PC
 
 Tested with an iPhone on iOS 27.2 and Windows 11.
@@ -52,6 +54,7 @@ Click the gear icon:
 | Frame rate | 30 or 60 fps |
 | Full screen on start | Go full screen as soon as mirroring begins |
 | Play audio | Play the iPhone's sound on the PC |
+| Theme | Default or Acid poster; more can be added (see below) |
 | Windows Firewall | Lets Mirrorly through the firewall on all network types (asks for admin approval) |
 
 Settings are saved in `%APPDATA%\Mirrorly\settings.ini`.
@@ -90,6 +93,11 @@ src/core/          AirPlay engine (portable C++17, also builds on Linux)
   crypto.*           SHA-512, AES, Ed25519, X25519
   native_media.c     FairPlay + FFmpeg decoding
 src/app/           Windows app (Win32, Direct2D, DirectWrite, waveOut)
+  app.h              app state, drawing toolkit and the Theme interface
+  render.cpp         shared drawing, Settings layout, theme picker
+  theme_default.cpp  Default theme
+  theme_poster.cpp   Acid poster theme
+  themes.cpp         theme registry
 tests/             fake_iphone.cpp: simulated iPhone for end-to-end tests
 third_party/       playfair, Monocypher, tiny-AES
 res/               icon, manifest, resources
@@ -106,6 +114,13 @@ sudo apt install build-essential nasm git gcc-mingw-w64-x86-64 g++-mingw-w64-x86
 ./build_ffmpeg.sh win        # minimal static FFmpeg 7.1 for Windows
 ./build_windows.sh           # → out/win/Mirrorly.exe
 ```
+
+### Adding a theme
+
+1. Create `src/app/theme_<name>.cpp` with a class deriving from `Theme` (see `app.h`). It draws each screen
+   (home, mirroring overlay, Now Playing), the Settings controls and a small preview for the picker.
+2. Add its factory to `allThemes()` in `src/app/themes.cpp`. The picker shows themes in that order.
+3. Optionally give it its own icon: add `N ICON "file.ico"` to `res/app.rc` and return `N` from `iconResource()`.
 
 ### Releases
 
