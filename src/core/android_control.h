@@ -37,7 +37,8 @@ constexpr uint64_t kPointerFinger = (uint64_t)-2;
 
 class AndroidControl {
 public:
-    explicit AndroidControl(sock_t s);
+    // onClipboard is called (on the reader thread) with the phone's clipboard text whenever it changes
+    explicit AndroidControl(sock_t s, std::function<void(const std::string&)> onClipboard = nullptr);
     ~AndroidControl();
     void stop();
     bool alive() const { return alive_; }
@@ -69,6 +70,7 @@ private:
     std::deque<std::vector<uint8_t>> queue_;
     std::thread writer_, reader_;
     uint64_t clipSeq_ = 0;
+    std::function<void(const std::string&)> onClipboard_;
 };
 
 }  // namespace mn

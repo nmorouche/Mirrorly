@@ -374,7 +374,8 @@ bool AndroidMirror::runSession(const std::string& serial, std::string& name, std
     snprintf(cmd, sizeof(cmd),
              "CLASSPATH=%s app_process / com.genymobile.scrcpy.Server %s scid=%08x log_level=info tunnel_forward=true "
              "%s video_codec=h264 video_bit_rate=%d max_size=%d max_fps=%d %s",
-             kRemoteJar, kScrcpyServerVersion, scid, cfg.control ? "clipboard_autosync=false" : "control=false",
+             kRemoteJar, kScrcpyServerVersion, scid,
+             !cfg.control ? "control=false" : cfg.clipboard ? "clipboard_autosync=true" : "clipboard_autosync=false",
              wireless ? std::min(cfg.videoBitRate, 8000000) : cfg.videoBitRate,
              cfg.maxSize, cfg.maxFps,
              cfg.audio ? "audio_codec=raw" : "audio=false");
@@ -504,7 +505,9 @@ bool AndroidMirror::runSession(const std::string& serial, std::string& name, std
     if (audio != MN_INVALID_SOCKET) audioThread = std::thread(&AndroidMirror::audioLoop, this, audio);
     if (ctl != MN_INVALID_SOCKET) {
         std::lock_guard<std::mutex> lk(ctlM_);
-        control_ = std::make_shared<AndroidControl>(ctl);
+        control_ = std::make_shared<AndroidControl>(ctl, [this](const std::string& text) {
+            if (statusListener_) statusListener_->onPhoneClipboard(text);
+        });
         LOGI("android: control channel ready");
     }
 

@@ -57,7 +57,7 @@ static const wchar_t G_SETTINGS = 0xE713, G_BACK = 0xE72B, G_CLOSE = 0xE711, G_F
 enum EvType {
     EV_CONNECTING, EV_SESSION_START, EV_SESSION_END, EV_MIRROR_START, EV_MIRROR_STOP, EV_PAUSED, EV_AUDIO_START,
     EV_AUDIO_STOP, EV_VOLUME, EV_METADATA, EV_ARTWORK, EV_PROGRESS, EV_FIREWALL_DONE, EV_ANDROID_STATUS,
-    EV_PAIRING, EV_UPDATE
+    EV_PAIRING, EV_UPDATE, EV_PHONE_CLIPBOARD
 };
 // update states (App::update_.state)
 enum UpdState { UPD_NONE, UPD_CHECKING, UPD_UP_TO_DATE, UPD_CHECK_FAILED, UPD_AVAILABLE, UPD_DOWNLOADING, UPD_READY,
@@ -187,6 +187,7 @@ public:
     void onPairingStatus(const mn::PairingStatus& p) override {
         post(EV_PAIRING, [&](Event& e) { e.i = (int)p.phase; e.s1 = p.qr; e.s2 = p.device; e.s3 = p.detail; e.s4 = p.codeTarget; });
     }
+    void onPhoneClipboard(const std::string& text) override { post(EV_PHONE_CLIPBOARD, [&](Event& e) { e.s1 = text; }); }
 
     static App* instance;
 
@@ -247,6 +248,8 @@ public:
     bool phoneKey(UINT msg, WPARAM w, LPARAM l);
     void pollGamepads();
     void releasePhoneInput();
+    void phoneCopied(const std::string& utf8);  // the phone's clipboard changed: copy it to the PC
+    void sharePcClipboard(bool paste);          // give the phone the PC's clipboard (and paste it)
     void loadKeymap();
     void saveKeymap();
     void setKeymapEdit(bool on);
@@ -376,6 +379,8 @@ public:
     std::vector<int> zonesDown_;     // zones currently pressed (index), pointer id = 0x100 + index
     bool touchDown_ = false;         // left button held on the video
     bool controlHintShown_ = false;
+    DWORD clipSeq_ = 0;    // PC clipboard sequence number at the last exchange with the phone
+    std::wstring lastClip_;  // text of that exchange (to skip echoes)
     bool padOpen_[4] = {false, false, false, false};
     uint32_t padPacket_[4] = {0, 0, 0, 0};
     void* xinputGetState_ = nullptr;

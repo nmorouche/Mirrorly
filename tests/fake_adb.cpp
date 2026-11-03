@@ -2,7 +2,8 @@
 //
 //   fake_adb video.h264 [port=5037] [script]
 // script: a sequence of "<seconds>:<state>" steps, e.g. "0:unauthorized,4:device,30:"
-// (state "" = unplugged). The video loops until the app disconnects.
+// (state "" = unplugged; "clip=<text>" = the phone copies <text>). The video loops until the app
+// disconnects.
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -38,7 +39,11 @@ int main(int argc, char** argv) {
         if (c != std::string::npos) {
             double at = atof(step.substr(0, c).c_str());
             while (mn::now_ms() - t0 < (uint64_t)(at * 1000)) mn::sleep_ms(50);
-            adb.setState(step.substr(c + 1));
+            std::string st = step.substr(c + 1);
+            if (st.compare(0, 5, "clip=") == 0)
+                adb.phoneClipboard(st.substr(5));
+            else
+                adb.setState(st);
             printf("[%.1fs] state: %s\n", at, step.substr(c + 1).c_str());
             fflush(stdout);
         }
@@ -71,6 +76,8 @@ int main(int argc, char** argv) {
                 printf("control: key action=%d keycode=%u meta=%x\n", pend[1], u32(2), u32(10));
             else if (t == 1)
                 printf("control: text \"%s\"\n", pend.substr(5, u32(1)).c_str());
+            else if (t == 9)
+                printf("control: clipboard paste=%d \"%s\"\n", pend[9], pend.substr(14, u32(10)).c_str());
             else
                 printf("control: %s\n", t < 15 ? names[t] : "?");
             fflush(stdout);

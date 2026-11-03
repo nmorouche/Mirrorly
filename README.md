@@ -81,6 +81,7 @@ While an Android phone is mirroring (by cable or Wi-Fi), the PC controls it:
 | Middle click | Home |
 | Mouse wheel | Scroll |
 | Keyboard | Typing and keys (Enter, arrows, Ctrl+A...) |
+| <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>X</kbd> | Copy / cut on the phone; the text lands on the PC's clipboard |
 | <kbd>Ctrl</kbd>+<kbd>V</kbd> | Pastes the PC's clipboard |
 | Game controller (Xbox-compatible) | Shows up on the phone as a controller |
 
@@ -89,7 +90,13 @@ screen, then press a key or a combination (`A`, `Ctrl+A`, `Shift`...). While tha
 touched, and several keys can be held at once. Drag a zone to move it, right-click it to remove it. Zones are kept
 per phone and per orientation; **Keys off** lets the keyboard type normally again.
 
-Both can be turned off in **Settings → Android** (*Control the phone*, *Game controllers*).
+**Copy and paste** work both ways while the phone is controlled. Text copied on the phone (with
+<kbd>Ctrl</kbd>+<kbd>C</kbd>, or the phone's own Copy menu) goes straight to the PC's clipboard. Text copied on
+the PC goes to the phone's clipboard when you switch back to Mirrorly, so the phone's own Paste works too;
+<kbd>Ctrl</kbd>+<kbd>V</kbd> pastes it directly. Only text is shared, not images or files.
+
+Both can be turned off in **Settings → Android** (*Control the phone*, which also covers the clipboard,
+*Game controllers*).
 
 ### iPhone
 

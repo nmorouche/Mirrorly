@@ -1,7 +1,9 @@
 // Mirrorly - controlling an Android phone from the PC
 //
 // Mouse: left button = finger (tap, drag, swipe), right button = Back, middle button = Home,
-// wheel = scroll. Keyboard: keys and text go to the phone; Ctrl+V pastes the PC clipboard.
+// wheel = scroll. Keyboard: keys and text go to the phone.
+// Clipboard: text copied on the phone lands on the PC's clipboard; text copied on the PC goes to
+// the phone when Mirrorly comes back to the front, and Ctrl+V pastes it there.
 // Key zones: spots on the screen bound to a key or a combination (e.g. "A", "Ctrl+A"); while
 // the key is held, the spot is touched, so games can be played with the keyboard. Game
 // controllers (XInput) appear on the phone as an Xbox 360 pad.
@@ -10,6 +12,7 @@
 #include <xinput.h>
 
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 
 #include "log.h"
@@ -305,23 +308,81 @@ bool App::phoneKey(UINT msg, WPARAM w, LPARAM l) {
     if (!down && !up) return false;
     if (isModifier(vk)) return true;
 
-    // Ctrl+V: paste the PC's clipboard on the phone
+    // Ctrl+V: paste the PC's clipboard on the phone (Ctrl+C / Ctrl+X go as keys; the phone sends back what it copied)
     if (down && vk == 'V' && mods == MOD_CONTROL) {
-        if (!repeat && OpenClipboard(hwnd_)) {
-            HANDLE h = GetClipboardData(CF_UNICODETEXT);
-            const wchar_t* t = h ? (const wchar_t*)GlobalLock(h) : nullptr;
-            if (t) {
-                ctl->setClipboard(to_utf8(t), true);
-                GlobalUnlock(h);
-            }
-            CloseClipboard();
-        }
+        if (!repeat) sharePcClipboard(true);
         return true;
     }
     int ak = androidKey(vk, mods);
     if (!ak) return true;  // its character comes as text (WM_CHAR)
     ctl->key(down ? akey::ACTION_DOWN : akey::ACTION_UP, ak, repeat ? 1 : 0, androidMeta(mods));
     return true;
+}
+
+// ------------------------------------------------------------------ clipboard
+
+static bool openClipboard(HWND hwnd) {
+    for (int i = 0; i < 5; i++) {  // another app may hold it for a moment
+        if (OpenClipboard(hwnd)) return true;
+        Sleep(15);
+    }
+    return false;
+}
+
+static std::wstring readPcClipboard(HWND hwnd) {
+    std::wstring t;
+    if (!IsClipboardFormatAvailable(CF_UNICODETEXT) || !openClipboard(hwnd)) return t;
+    HANDLE h = GetClipboardData(CF_UNICODETEXT);
+    const wchar_t* p = h ? (const wchar_t*)GlobalLock(h) : nullptr;
+    if (p) {
+        t = p;
+        GlobalUnlock(h);
+    }
+    CloseClipboard();
+    return t;
+}
+
+void App::phoneCopied(const std::string& utf8) {
+    if (!sessionActive_ || !clientIsAndroid() || !settings_.controlAndroid || utf8.empty()) return;
+    std::wstring in = from_utf8(utf8), t;
+    for (size_t i = 0; i < in.size(); i++) {  // Android lines end with \n, Windows ones with \r\n
+        if (in[i] == L'\n' && (i == 0 || in[i - 1] != L'\r')) t += L'\r';
+        t += in[i];
+    }
+    if (t == lastClip_) return;  // what we just gave the phone
+    if (!openClipboard(hwnd_)) {
+        LOGW("clipboard: busy, the phone's copy was not received");
+        return;
+    }
+    EmptyClipboard();
+    size_t bytes = (t.size() + 1) * sizeof(wchar_t);
+    HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (void* p = g ? GlobalLock(g) : nullptr) {
+        memcpy(p, t.c_str(), bytes);
+        GlobalUnlock(g);
+        if (!SetClipboardData(CF_UNICODETEXT, g)) GlobalFree(g);
+    }
+    CloseClipboard();
+    lastClip_ = t;
+    clipSeq_ = GetClipboardSequenceNumber();
+    LOGI("clipboard: %d characters copied from the phone", (int)t.size());
+    showToast(L"Copied from your phone");
+}
+
+void App::sharePcClipboard(bool paste) {
+    auto ctl = android_.control();
+    if (!ctl || !clientIsAndroid() || !settings_.controlAndroid) return;
+    DWORD seq = GetClipboardSequenceNumber();
+    if (!paste && seq == clipSeq_) return;  // nothing new since the last exchange
+    clipSeq_ = seq;
+    std::wstring t = readPcClipboard(hwnd_);
+    if (t.empty() || (!paste && t == lastClip_)) return;
+    lastClip_ = t;
+    std::wstring lf;
+    for (wchar_t c : t)
+        if (c != L'\r') lf += c;
+    ctl->setClipboard(to_utf8(lf), paste);
+    LOGI("clipboard: %d characters %s the phone", (int)lf.size(), paste ? "pasted on" : "shared with");
 }
 
 // Lift every finger and key zone (focus lost, session ended, editing started).

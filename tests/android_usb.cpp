@@ -39,6 +39,13 @@ struct Listener : ReceiverListener, AndroidStatusListener {
     std::vector<AndroidState> states;
     std::string lastDevice;
     int lastW = 0, lastH = 0;
+    std::string phoneClip;
+    std::atomic<int> phoneClips{0};
+    void onPhoneClipboard(const std::string& t) override {
+        std::lock_guard<std::mutex> lk(m);
+        phoneClip = t;
+        phoneClips++;
+    }
 
     void onSessionStart(const ClientInfo& c) override {
         sessionStarts++;
@@ -203,6 +210,24 @@ int main(int argc, char** argv) {
         CHECK(ok, "controller input: A pressed");
         at += 20;
         CHECK(n >= at + 3 && b[at] == 14, "controller removed (%zu bytes received)", n);
+
+        // clipboard, both ways
+        CHECK(adb.lastShell.find("clipboard_autosync=true") != std::string::npos, "server started with clipboard sync");
+        adb.phoneClipboard("copied on the phone\nline 2 \xe2\x9c\x93");
+        CHECK(waitFor([&] { return L.phoneClips == 1; }, 2000), "phone's copy received");
+        {
+            std::lock_guard<std::mutex> lk(L.m);
+            CHECK(L.phoneClip == "copied on the phone\nline 2 \xe2\x9c\x93", "phone's copy text intact");
+        }
+        ctl->setClipboard("from the PC", true);
+        got.clear();
+        waitFor([&] { got += adb.takeControlBytes(); return got.size() >= 14 + 11; }, 2000);
+        b = (const uint8_t*)got.data();
+        ok = got.size() == 25 && b[0] == 9 && b[9] == 1 && b[13] == 11 && got.compare(14, 11, "from the PC") == 0;
+        CHECK(ok, "PC clipboard sent to the phone and pasted");
+        adb.phoneClipboard("");  // phone cleared its clipboard: still a valid message
+        adb.phoneClipboard("second");
+        CHECK(waitFor([&] { return L.phoneClips == 3; }, 2000) && ctl->alive(), "further copies received, channel still up");
     }
 
     printf("== user closes the mirror\n");

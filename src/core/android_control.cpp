@@ -60,7 +60,8 @@ const uint8_t kGamepadDesc[] = {
 };
 }  // namespace
 
-AndroidControl::AndroidControl(sock_t s) : sock_(s) {
+AndroidControl::AndroidControl(sock_t s, std::function<void(const std::string&)> onClipboard)
+    : sock_(s), onClipboard_(std::move(onClipboard)) {
     sock_set_nodelay(sock_);
     writer_ = std::thread(&AndroidControl::writer, this);
     reader_ = std::thread(&AndroidControl::reader, this);
@@ -107,7 +108,7 @@ void AndroidControl::writer() {
     }
 }
 
-// Messages from the phone (clipboard changes, acks, UHID output): read and dropped.
+// Messages from the phone: clipboard changes go to onClipboard; acks and UHID output are dropped.
 void AndroidControl::reader() {
     uint8_t type;
     std::vector<uint8_t> buf;
@@ -120,6 +121,7 @@ void AndroidControl::reader() {
             if (n > (1u << 20)) break;
             buf.resize(n);
             if (n && !sock_recv_all(sock_, buf.data(), n, &running_)) break;
+            if (onClipboard_) onClipboard_(std::string(buf.begin(), buf.end()));
         } else if (type == 1) {  // clipboard ack: sequence
             if (!sock_recv_all(sock_, h, 8, &running_)) break;
         } else if (type == 2) {  // UHID output: id16 + len16 + data

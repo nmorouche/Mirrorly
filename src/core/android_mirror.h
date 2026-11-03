@@ -38,6 +38,7 @@ struct AndroidConfig {
     int videoBitRate = 12000000;
     bool wireless = true;  // connect to paired phones over Wi-Fi (Wireless debugging, Android 11+)
     bool control = true;   // mouse, keyboard and game controllers control the phone
+    bool clipboard = true; // share the clipboard both ways (needs control)
 };
 
 enum class AndroidState {
@@ -76,6 +77,8 @@ public:
     virtual ~AndroidStatusListener() {}
     virtual void onAndroidStatus(const AndroidStatus&) = 0;
     virtual void onPairingStatus(const PairingStatus&) {}
+    // The phone's clipboard changed (text copied or cut on the phone). Called on a network thread.
+    virtual void onPhoneClipboard(const std::string&) {}
 };
 
 class AndroidMirror {

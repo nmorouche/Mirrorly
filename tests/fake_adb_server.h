@@ -81,6 +81,19 @@ public:
         r.swap(controlBytes);
         return r;
     }
+    // The phone's clipboard changes: sends a scrcpy clipboard device message on the control socket.
+    bool phoneClipboard(const std::string& text) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (ctlSock_ == MN_INVALID_SOCKET) return false;
+        std::string m(1, '\0');
+        uint32_t n = (uint32_t)text.size();
+        m += (char)(n >> 24);
+        m += (char)(n >> 16);
+        m += (char)(n >> 8);
+        m += (char)n;
+        m += text;
+        return sock_send_all(ctlSock_, (const uint8_t*)m.data(), m.size());
+    }
     std::string wifiSerial() {
         std::lock_guard<std::mutex> lk(m_);
         return wifiSerial_;
@@ -379,6 +392,10 @@ private:
 
     // control socket: keep every byte the client sends
     void controlStream(sock_t s, int gen) {
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            ctlSock_ = s;
+        }
         char b[4096];
         while (running_ && gen == dropGen_) {
             int w = sock_wait_readable(s, 100);
@@ -388,6 +405,10 @@ private:
             if (r <= 0) break;
             std::lock_guard<std::mutex> lk(m_);
             controlBytes.append(b, (size_t)r);
+        }
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            if (ctlSock_ == s) ctlSock_ = MN_INVALID_SOCKET;
         }
         sock_close(s);
     }
@@ -432,6 +453,7 @@ private:
     std::atomic<int> dropGen_{0};
     std::atomic<bool> paired_{false};
     std::string wifiSerial_;
+    sock_t ctlSock_ = MN_INVALID_SOCKET;  // current control socket (phone -> PC messages)
 };
 
 }  // namespace fakeadb

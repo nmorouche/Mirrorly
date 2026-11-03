@@ -393,6 +393,10 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
     case WM_KILLFOCUS:
         releasePhoneInput();
         break;
+    case WM_ACTIVATE:
+        // back in Mirrorly after copying something elsewhere: the phone gets it too
+        if (LOWORD(w) != WA_INACTIVE) sharePcClipboard(false);
+        break;
     case WM_KEYUP:
     case WM_SYSKEYUP:
     case WM_SYSCHAR:
@@ -776,6 +780,8 @@ void App::handleEvent(Event* e) {
         connecting_ = true;
         sessionActive_ = true;
         client_ = e->client;
+        clipSeq_ = GetClipboardSequenceNumber();  // the phone's clipboard is left alone until something new is copied
+        lastClip_.clear();
         airplayDb_ = 0;
         updateGain();
         break;
@@ -897,6 +903,9 @@ void App::handleEvent(Event* e) {
         }
         break;
     }
+    case EV_PHONE_CLIPBOARD:
+        phoneCopied(e->s1);
+        break;
     case EV_PAIRING:
         pair_.phase = (mn::PairingStatus::Phase)e->i;
         if (!e->s1.empty() || pair_.phase != mn::PairingStatus::Waiting) pair_.qr = e->s1;

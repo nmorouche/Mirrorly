@@ -710,7 +710,7 @@ void App::drawSettings(float W, float H) {
     t.rowText(*this, lx0, lx1 - 140, cy, L"Pair a phone over Wi-Fi", L"Android 11 or later, on the same Wi-Fi as this PC");
     t.button(*this, H_PAIR, L"Pair", G_WIFI, lx1, cy);
     cy += rowH;
-    t.rowText(*this, lx0, lx1 - 70, cy, L"Control the phone", L"Mouse and keyboard; right-click is Back, middle-click is Home");
+    t.rowText(*this, lx0, lx1 - 70, cy, L"Control the phone", L"Mouse, keyboard and clipboard; right-click is Back, middle-click is Home");
     t.toggle(*this, H_ANDROID_CONTROL, settings_.controlAndroid, lx1, cy);
     cy += rowH;
     t.rowText(*this, lx0, lx1 - 70, cy, L"Game controllers", L"Controllers plugged into this PC work on the phone");
