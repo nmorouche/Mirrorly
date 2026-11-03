@@ -18,7 +18,7 @@
 #include "log.h"
 
 #ifndef MIRRORLY_REPO
-#define MIRRORLY_REPO "nmorouche/Airplay-server"
+#define MIRRORLY_REPO "nmorouche/Mirrorly"
 #endif
 
 namespace {

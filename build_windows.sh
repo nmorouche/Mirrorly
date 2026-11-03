@@ -15,7 +15,7 @@ OUT=out/win; mkdir -p $OUT/obj
 INC="-I src/core -I src/app -I third_party/qrcodegen -I third_party/playfair -I third_party/monocypher -I third_party/tinyaes -I $FF/include"
 BUILD=${BUILD:-$(git rev-parse --short HEAD 2>/dev/null || echo dev)}
 # GitHub repository whose releases the app checks for updates
-REPO=${REPO:-nmorouche/Airplay-server}
+REPO=${REPO:-nmorouche/Mirrorly}
 CFLAGS="-O2 -DNDEBUG -DMIRRORLY_BUILD=\"$BUILD\" -DMIRRORLY_REPO=\"$REPO\" -DMIRRORLY_VERSION=\"$VERSION\" -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 $INC"
 for f in third_party/playfair/*.c third_party/monocypher/*.c third_party/tinyaes/aes.c third_party/qrcodegen/qrcodegen.c src/core/native_media.c; do
   o=$OUT/obj/$(basename $f .c).o; [ $o -nt $f ] || $CC $CFLAGS -c $f -o $o
