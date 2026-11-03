@@ -51,7 +51,7 @@ static inline D2D1_COLOR_F rgb(uint32_t c, float a = 1.0f) {
 // icon glyphs (Segoe Fluent Icons / Segoe MDL2 Assets)
 static const wchar_t G_SETTINGS = 0xE713, G_BACK = 0xE72B, G_CLOSE = 0xE711, G_FULL = 0xE740, G_WINDOW = 0xE73F,
                      G_VOLUME = 0xE767, G_MUTE = 0xE74F, G_MUSIC = 0xE8D6, G_SHIELD = 0xEA18, G_LOCK = 0xE72E,
-                     G_CHECK = 0xE73E, G_USB = 0xE88E, G_WIFI = 0xE701, G_DOWNLOAD = 0xE896, G_REFRESH = 0xE72C;
+                     G_CHECK = 0xE73E, G_USB = 0xE88E, G_WIFI = 0xE701, G_DOWNLOAD = 0xE896, G_REFRESH = 0xE72C, G_KEYBOARD = 0xE765, G_GAMEPAD = 0xE7FC;
 
 // ------------------------------------------------------------------ events from the engine
 enum EvType {
@@ -79,6 +79,7 @@ enum Hit {
     H_MUTE, H_FULLSCREEN, H_DISCONNECT, H_OPENLOG, H_FIREWALL_LINK, H_NAMEBOX, H_THEME_STRIP, H_ANDROID, H_USB_ACTION,
     H_VOL_POPOVER, H_VOL_ICON, H_VOL_SLIDER, H_ANDROID_WIFI, H_PAIR, H_PAIR_CLOSE, H_PAIR_RETRY,
     H_UPDATE, H_UPDATE_NOW, H_UPDATE_LATER, H_UPDATE_CHECK, H_UPDATE_SCRIM,
+    H_ANDROID_CONTROL, H_GAMEPAD, H_KEYMAP, H_KEYMAP_DONE, H_KEYMAP_TOGGLE, H_KEYMAP_CLEAR, H_KEYMAP_BAR,
     H_THEME = 100
 };
 
@@ -120,6 +121,10 @@ public:
     // updates: a small "new version" button on the home screen, and the update dialog
     virtual void drawUpdateBadge(App&, float W, float H) = 0;
     virtual void drawUpdateDialog(App&, float W, float H) = 0;
+    // phone control: one key zone (state: 0 shown faintly while playing, 1 editing, 2 waiting for a key,
+    // 3 pressed) and the bar shown while editing zones
+    virtual void drawKeyZone(App&, D2D1_POINT_2F c, const std::wstring& label, int state, float alpha) = 0;
+    virtual void drawKeymapBar(App&, float W, float H, D2D1_RECT_F video) = 0;
     // thumbnail for the theme picker
     virtual void drawPreview(App&, D2D1_RECT_F r) = 0;
 
@@ -230,6 +235,23 @@ public:
     void installUpdate();
     void cleanupAfterUpdate(bool justUpdated);
     void openUpdateDialog();
+    // phone control (phone_input.cpp)
+    struct KeyZone {
+        float x = 0, y = 0;  // position in the video frame, 0..1
+        int vk = 0;          // Windows virtual key (0 = not bound yet)
+        int mods = 0;        // MOD_CONTROL | MOD_SHIFT | MOD_ALT
+    };
+    bool controlling() const;
+    bool framePoint(float x, float y, int& fx, int& fy, bool clamp) const;
+    bool phoneMouse(UINT msg, float x, float y, WPARAM w);
+    bool phoneKey(UINT msg, WPARAM w, LPARAM l);
+    void pollGamepads();
+    void releasePhoneInput();
+    void loadKeymap();
+    void saveKeymap();
+    void setKeymapEdit(bool on);
+    std::wstring zoneLabel(const KeyZone& z) const;
+    void drawKeyZones(float W, float H, D2D1_RECT_F video);
 
     // ---- rendering (render.cpp)
     bool createDeviceResources();
@@ -344,6 +366,19 @@ public:
     } update_;
     bool updateDialog_ = false, updatePromptPending_ = false, updateInstallPending_ = false, justUpdated_ = false;
     std::wstring relaunch_;  // set when an update is installed: started after the app closes
+
+    // phone control state
+    std::vector<KeyZone> zones_;
+    std::wstring keymapId_;
+    bool keymapOn_ = true, keymapEdit_ = false;
+    int zoneDrag_ = -1, zonePending_ = -1, pendingModifier_ = 0;
+    float dragDx_ = 0, dragDy_ = 0;
+    std::vector<int> zonesDown_;     // zones currently pressed (index), pointer id = 0x100 + index
+    bool touchDown_ = false;         // left button held on the video
+    bool controlHintShown_ = false;
+    bool padOpen_[4] = {false, false, false, false};
+    uint32_t padPacket_[4] = {0, 0, 0, 0};
+    void* xinputGetState_ = nullptr;
     bool iphoneUsb_ = false;        // an iPhone shares its connection over USB (Personal Hotspot)
     uint64_t ifaceCheck_ = 0;
     std::atomic<bool> startedAdb_{false};

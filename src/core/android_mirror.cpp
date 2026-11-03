@@ -373,8 +373,9 @@ bool AndroidMirror::runSession(const std::string& serial, std::string& name, std
     char cmd[768];
     snprintf(cmd, sizeof(cmd),
              "CLASSPATH=%s app_process / com.genymobile.scrcpy.Server %s scid=%08x log_level=info tunnel_forward=true "
-             "control=false video_codec=h264 video_bit_rate=%d max_size=%d max_fps=%d %s",
-             kRemoteJar, kScrcpyServerVersion, scid, wireless ? std::min(cfg.videoBitRate, 8000000) : cfg.videoBitRate,
+             "%s video_codec=h264 video_bit_rate=%d max_size=%d max_fps=%d %s",
+             kRemoteJar, kScrcpyServerVersion, scid, cfg.control ? "clipboard_autosync=false" : "control=false",
+             wireless ? std::min(cfg.videoBitRate, 8000000) : cfg.videoBitRate,
              cfg.maxSize, cfg.maxFps,
              cfg.audio ? "audio_codec=raw" : "audio=false");
     sock_t sh = adb_.shell(serial, cmd);
@@ -447,14 +448,22 @@ bool AndroidMirror::runSession(const std::string& serial, std::string& name, std
         error = stopRequested_ ? "cancelled" : "the phone did not answer";
         return false;
     }
-    sock_t audio = MN_INVALID_SOCKET;
+    sock_t audio = MN_INVALID_SOCKET, ctl = MN_INVALID_SOCKET;
     if (cfg.audio) audio = tcp_connect(lo, port, 2000);
+    if (cfg.control) ctl = tcp_connect(lo, port, 2000);  // sockets connect in order: video, audio, control
     adb_.killForward(serial, port);
     {
         std::lock_guard<std::mutex> lk(sockM_);
         socks_.push_back(video);
         if (audio != MN_INVALID_SOCKET) socks_.push_back(audio);
+        if (ctl != MN_INVALID_SOCKET) socks_.push_back(ctl);
     }
+    struct CtlCloser {  // the control socket lives for the whole session
+        sock_t& s;
+        ~CtlCloser() {
+            if (s != MN_INVALID_SOCKET) sock_close(s);
+        }
+    } ctlCloser{ctl};
     int rcvbuf = 4 << 20;
     setsockopt(video, SOL_SOCKET, SO_RCVBUF, (const char*)&rcvbuf, sizeof(rcvbuf));
 
@@ -493,6 +502,11 @@ bool AndroidMirror::runSession(const std::string& serial, std::string& name, std
     }
     std::thread audioThread;
     if (audio != MN_INVALID_SOCKET) audioThread = std::thread(&AndroidMirror::audioLoop, this, audio);
+    if (ctl != MN_INVALID_SOCKET) {
+        std::lock_guard<std::mutex> lk(ctlM_);
+        control_ = std::make_shared<AndroidControl>(ctl);
+        LOGI("android: control channel ready");
+    }
 
     {
         VideoPublisher video_out(rx_.frames(), l, "android");
@@ -540,7 +554,13 @@ bool AndroidMirror::runSession(const std::string& serial, std::string& name, std
         if (started && l) l->onMirrorStop();
     }
     mirroring_ = false;
+    std::shared_ptr<AndroidControl> c;
+    {
+        std::lock_guard<std::mutex> lk(ctlM_);
+        c.swap(control_);
+    }
     cleanup(video, MN_INVALID_SOCKET);
+    if (c) c->stop();
     if (audioThread.joinable()) audioThread.join();
     if (audio != MN_INVALID_SOCKET) sock_close(audio);
     if (l) l->onSessionEnd();

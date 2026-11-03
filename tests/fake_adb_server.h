@@ -73,7 +73,14 @@ public:
     // Wireless debugging: "host:pair:<code>:<ip:port>" succeeds with this code; once paired,
     // "host:connect:<ip:port>" adds the phone as a Wi-Fi device with serial <ip:port>.
     std::string pairCode;
-    std::atomic<int> pairs{0}, connects{0};
+    std::atomic<int> pairs{0}, connects{0}, controlConns{0};
+    std::string controlBytes;  // everything received on control sockets (lock with control())
+    std::string takeControlBytes() {
+        std::lock_guard<std::mutex> lk(m_);
+        std::string r;
+        r.swap(controlBytes);
+        return r;
+    }
     std::string wifiSerial() {
         std::lock_guard<std::mutex> lk(m_);
         return wifiSerial_;
@@ -272,13 +279,28 @@ private:
                 return;
             }
             videoConns++;
-            // the audio socket (if the client wants sound) connects right after the video one
-            std::thread at([this, l, gen, acceptOne]() mutable {
-                sock_t aud = acceptOne(1500);
+            // then the audio socket (unless "audio=false") and the control socket (unless "control=false")
+            std::string cmd;
+            {
+                std::lock_guard<std::mutex> lk(m_);
+                cmd = lastShell;
+            }
+            bool wantAudio = cmd.find("audio=false") == std::string::npos;
+            bool wantControl = cmd.find("control=false") == std::string::npos;
+            std::thread at([this, l, gen, acceptOne, wantAudio, wantControl]() mutable {
+                sock_t aud = wantAudio ? acceptOne(1500) : MN_INVALID_SOCKET;
+                sock_t ctl = wantControl ? acceptOne(1500) : MN_INVALID_SOCKET;
                 sock_close(l);
-                if (aud == MN_INVALID_SOCKET) return;
-                audioConns++;
-                audioStream(aud, gen);
+                std::thread ct;
+                if (ctl != MN_INVALID_SOCKET) {
+                    controlConns++;
+                    ct = std::thread([this, ctl, gen]() { controlStream(ctl, gen); });
+                }
+                if (aud != MN_INVALID_SOCKET) {
+                    audioConns++;
+                    audioStream(aud, gen);
+                }
+                if (ct.joinable()) ct.join();
             });
             videoStream(video, gen);
             at.join();
@@ -351,6 +373,21 @@ private:
                 char x;
                 if (recv(s, &x, 1, 0) <= 0) break;
             }
+        }
+        sock_close(s);
+    }
+
+    // control socket: keep every byte the client sends
+    void controlStream(sock_t s, int gen) {
+        char b[4096];
+        while (running_ && gen == dropGen_) {
+            int w = sock_wait_readable(s, 100);
+            if (w < 0) break;
+            if (w == 0) continue;
+            int r = recv(s, b, sizeof(b), 0);
+            if (r <= 0) break;
+            std::lock_guard<std::mutex> lk(m_);
+            controlBytes.append(b, (size_t)r);
         }
         sock_close(s);
     }

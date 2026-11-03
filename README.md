@@ -16,6 +16,7 @@
 - **Screen mirroring** from iPhone and iPad, up to 4K and 60 fps
 - **Android phones over USB**: plug the phone in and it mirrors, screen and sound
 - **Android phones over Wi-Fi**: pair once with a QR code, then mirror without a cable
+- **Control Android phones** with the mouse, the keyboard and game controllers, with key zones for games
 - **iPhone over USB**, through Personal Hotspot (same Screen Mirroring flow, no Wi-Fi needed)
 - **Audio**, both while mirroring and for music-only AirPlay (ALAC, AAC, AAC-ELD)
 - **Now Playing** view with artwork, title, artist and progress when streaming music
@@ -68,6 +69,27 @@ Android 11 and later can do the same over Wi-Fi, through *Wireless debugging*:
 You only pair once. Afterwards, whenever Wireless debugging is on, the phone shows up on the home screen
 as *available over Wi-Fi*: click **Mirror**. Many phones turn Wireless debugging off when they change network
 or restart; turn it back on from Developer options (or its Quick Settings tile).
+
+### Controlling an Android phone
+
+While an Android phone is mirroring (by cable or Wi-Fi), the PC controls it:
+
+| On the PC | On the phone |
+| --- | --- |
+| Left click / drag | Tap / swipe |
+| Right click | Back |
+| Middle click | Home |
+| Mouse wheel | Scroll |
+| Keyboard | Typing and keys (Enter, arrows, Ctrl+A...) |
+| <kbd>Ctrl</kbd>+<kbd>V</kbd> | Pastes the PC's clipboard |
+| Game controller (Xbox-compatible) | Shows up on the phone as a controller |
+
+**Key zones** turn the keyboard into a game pad: click the keyboard button in the controls, click a spot on the
+screen, then press a key or a combination (`A`, `Ctrl+A`, `Shift`...). While that key is held, the spot is
+touched, and several keys can be held at once. Drag a zone to move it, right-click it to remove it. Zones are kept
+per phone and per orientation; **Keys off** lets the keyboard type normally again.
+
+Both can be turned off in **Settings → Android** (*Control the phone*, *Game controllers*).
 
 ### iPhone
 
@@ -171,6 +193,7 @@ src/core/          AirPlay engine (portable C++17, also builds on Linux)
   streams.*          mirroring video, RTP audio, NTP timing
   adb.*              adb host-protocol client (devices, push, forward, shell)
   android_mirror.*   Android mirroring over USB and Wi-Fi (scrcpy server streams, pairing)
+  android_control.*  scrcpy control messages (touch, keys, text, clipboard, virtual game controllers)
   plist.*            binary property-list reader/writer
   crypto.*           SHA-512, AES, Ed25519, X25519
   native_media.c     FairPlay + FFmpeg decoding
@@ -181,6 +204,7 @@ src/app/           Windows app (Win32, Direct2D, DirectWrite, waveOut)
   theme_poster.cpp   Acid poster theme
   themes.cpp         theme registry
   android_usb.cpp    bundled adb, iPhone-over-USB detection
+  phone_input.cpp    controlling Android phones: mouse, keyboard, key zones, game controllers
   updater.cpp        update check, download, checksum and self-replacement
 tests/             simulated iPhone and Android phone for end-to-end tests
 third_party/       playfair, Monocypher, tiny-AES, qrcodegen

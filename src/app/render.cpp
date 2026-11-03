@@ -693,8 +693,8 @@ void App::drawSettings(float W, float H) {
 
     // ---- Android
     y = t.sectionTitle(*this, x0, x1, y, L"Android");
-    g = D2D1::RectF(x0, y, x1, y + rowH * 3);
-    t.group(*this, g, 3, rowH);
+    g = D2D1::RectF(x0, y, x1, y + rowH * 5);
+    t.group(*this, g, 5, rowH);
     cy = g.top + rowH / 2;
     std::wstring androidDesc = androidSettingsText();
     t.rowText(*this, lx0, lx1 - 70, cy, L"USB cable", androidDesc.c_str());
@@ -709,6 +709,12 @@ void App::drawSettings(float W, float H) {
     cy += rowH;
     t.rowText(*this, lx0, lx1 - 140, cy, L"Pair a phone over Wi-Fi", L"Android 11 or later, on the same Wi-Fi as this PC");
     t.button(*this, H_PAIR, L"Pair", G_WIFI, lx1, cy);
+    cy += rowH;
+    t.rowText(*this, lx0, lx1 - 70, cy, L"Control the phone", L"Mouse and keyboard; right-click is Back, middle-click is Home");
+    t.toggle(*this, H_ANDROID_CONTROL, settings_.controlAndroid, lx1, cy);
+    cy += rowH;
+    t.rowText(*this, lx0, lx1 - 70, cy, L"Game controllers", L"Controllers plugged into this PC work on the phone");
+    t.toggle(*this, H_GAMEPAD, settings_.gamepadAndroid, lx1, cy);
     y = g.bottom + gap;
 
     // ---- iPhone
@@ -799,7 +805,10 @@ void App::drawMirror(float W, float H) {
     } else {
         theme_->drawMirrorWaiting(*this, W, H);
     }
-    if (overlayAlpha_ >= 0.02f) theme_->drawMirrorOverlay(*this, W, H, overlayAlpha_, dst);
+    if (keymapEdit_ && controlling()) fillRect(dst, 0x000000, 0.2f);  // the screen dims while editing key zones
+    drawKeyZones(W, H, dst);
+    if (overlayAlpha_ >= 0.02f && !keymapEdit_) theme_->drawMirrorOverlay(*this, W, H, overlayAlpha_, dst);
+    if (keymapEdit_ && controlling()) theme_->drawKeymapBar(*this, W, H, dst);
 }
 
 // ================================================================== frame

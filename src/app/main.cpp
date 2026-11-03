@@ -115,6 +115,7 @@ bool App::init(HINSTANCE inst, int show) {
     checkUsbIphone();
     cleanupAfterUpdate(justUpdated_);
     SetTimer(hwnd_, 2, 5000, nullptr);  // first update check shortly after start
+    SetTimer(hwnd_, 3, 10, nullptr);    // game controllers
     return true;
 }
 
@@ -268,6 +269,10 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         return 0;
     }
     case WM_TIMER: {
+        if (w == 3) {
+            pollGamepads();
+            return 0;
+        }
         if (w == 2) {
             SetTimer(hwnd_, 2, 6 * 60 * 60 * 1000, nullptr);  // then every 6 hours
             checkForUpdate(false);
@@ -282,7 +287,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
             InvalidateRect(hwnd_, nullptr, FALSE);
         }
         if (overVolume) volumeTouched_ = now;
-        float target = (inMirror && (now - lastMouseMove_ < 2500 || !haveFrame_ || hover_ != H_NONE || volumeOpen_)) ? 1.0f : 0.0f;
+        float target = (inMirror && (now - lastMouseMove_ < 2500 || !haveFrame_ || hover_ != H_NONE || volumeOpen_ || keymapEdit_)) ? 1.0f : 0.0f;
         if (inMirror && fabsf(target - overlayAlpha_) > 0.01f) {
             overlayAlpha_ += (target - overlayAlpha_) * 0.25f;
             animate = true;
@@ -324,6 +329,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
             setVolumeFromX(x);
             return 0;
         }
+        if ((touchDown_ || zoneDrag_ >= 0) && phoneMouse(WM_MOUSEMOVE, x, y, w)) return 0;
         if (h != hover_) {
             hover_ = h;
             InvalidateRect(hwnd_, nullptr, FALSE);
@@ -353,11 +359,14 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
             closeVolume();  // a click anywhere else closes the volume popover
             InvalidateRect(hwnd_, nullptr, FALSE);
         }
+        if (phoneMouse(WM_LBUTTONDOWN, GET_X_LPARAM(l) * 96.0f / dpi_, GET_Y_LPARAM(l) * 96.0f / dpi_, w)) return 0;
         pressed_ = hover_;
         if (GetFocus() == edit_ && pressed_ != H_NAMEBOX) SetFocus(hwnd_);
         SetCapture(hwnd_);
         return 0;
     case WM_LBUTTONUP: {
+        if ((touchDown_ || zoneDrag_ >= 0) && phoneMouse(WM_LBUTTONUP, GET_X_LPARAM(l) * 96.0f / dpi_, GET_Y_LPARAM(l) * 96.0f / dpi_, w))
+            return 0;
         ReleaseCapture();
         if (volumeDrag_) {
             volumeDrag_ = false;
@@ -372,9 +381,25 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         return 0;
     }
     case WM_LBUTTONDBLCLK:
-        if (mirrorActive_ && !settingsOpen_ && hover_ == H_NONE) setFullscreen(!fullscreen_);
+        if (phoneMouse(WM_LBUTTONDBLCLK, GET_X_LPARAM(l) * 96.0f / dpi_, GET_Y_LPARAM(l) * 96.0f / dpi_, w)) return 0;
+        if (mirrorActive_ && !settingsOpen_ && hover_ == H_NONE && !controlling()) setFullscreen(!fullscreen_);
         return 0;
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONUP:
+        phoneMouse(m, GET_X_LPARAM(l) * 96.0f / dpi_, GET_Y_LPARAM(l) * 96.0f / dpi_, w);
+        return 0;
+    case WM_KILLFOCUS:
+        releasePhoneInput();
+        break;
+    case WM_KEYUP:
+    case WM_SYSKEYUP:
+    case WM_SYSCHAR:
+        if (phoneKey(m, w, l)) return 0;
+        break;
     case WM_KEYDOWN:
+        if (phoneKey(m, w, l)) return 0;
         if (w == VK_F11 || (w == VK_RETURN && (GetKeyState(VK_MENU) & 0x8000))) setFullscreen(!fullscreen_);
         else if (w == VK_ESCAPE) {
             if (fullscreen_) setFullscreen(false);
@@ -391,6 +416,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         }
         return 0;
     case WM_CHAR:
+        if (phoneKey(m, w, l)) return 0;
         // pairing with a code: the 6 digits the phone shows
         if (pairingOpen_ && pair_.phase == mn::PairingStatus::Waiting && !pair_.codeTarget.empty()) {
             if (w >= '0' && w <= '9' && pairTyped_.size() < 6) {
@@ -404,6 +430,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         }
         break;
     case WM_SYSKEYDOWN:
+        if (phoneKey(m, w, l)) return 0;
         if (w == VK_RETURN) {
             setFullscreen(!fullscreen_);
             return 0;
@@ -428,6 +455,11 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         if (!settingsOpen_ && volumeOpen_ && m == WM_MOUSEWHEEL) {
             changeVolume(GET_WHEEL_DELTA_WPARAM(w) > 0 ? 5 : -5);
             return 0;
+        }
+        if (controlling() && !keymapEdit_) {
+            POINT pt{GET_X_LPARAM(l), GET_Y_LPARAM(l)};  // wheel positions are in screen coordinates
+            ScreenToClient(hwnd_, &pt);
+            if (phoneMouse(m, pt.x * 96.0f / dpi_, pt.y * 96.0f / dpi_, w)) return 0;
         }
         if (settingsOpen_) {
             float d = GET_WHEEL_DELTA_WPARAM(w) / 120.0f;
@@ -554,6 +586,33 @@ void App::click(int hit) {
         checkForUpdate(true);
         break;
     case H_UPDATE_SCRIM:
+    case H_KEYMAP_BAR:
+        break;
+    case H_KEYMAP:
+        setKeymapEdit(!keymapEdit_);
+        break;
+    case H_KEYMAP_DONE:
+        setKeymapEdit(false);
+        break;
+    case H_KEYMAP_TOGGLE:
+        keymapOn_ = !keymapOn_;
+        saveKeymap();
+        showToast(keymapOn_ ? L"Key zones on" : L"Key zones off: keys type on the phone");
+        break;
+    case H_KEYMAP_CLEAR:
+        releasePhoneInput();
+        zones_.clear();
+        zonePending_ = zoneDrag_ = -1;
+        saveKeymap();
+        break;
+    case H_ANDROID_CONTROL:
+        settings_.controlAndroid = !settings_.controlAndroid;
+        applySettings(false);
+        if (clientIsAndroid() && sessionActive_) showToast(L"Applies the next time the phone connects");
+        break;
+    case H_GAMEPAD:
+        settings_.gamepadAndroid = !settings_.gamepadAndroid;
+        applySettings(false);
         break;
     case H_FIREWALL:
     case H_FIREWALL_LINK:
@@ -722,6 +781,11 @@ void App::handleEvent(Event* e) {
         break;
     case EV_SESSION_END:
         closeVolume();
+        releasePhoneInput();
+        keymapEdit_ = false;
+        keymapId_.clear();
+        zones_.clear();
+        for (bool& p : padOpen_) p = false;
         if (updatePromptPending_) {
             updatePromptPending_ = false;
             updateDialog_ = true;
@@ -739,6 +803,10 @@ void App::handleEvent(Event* e) {
         if (fullscreen_) setFullscreen(false);
         break;
     case EV_MIRROR_START:
+        if (clientIsAndroid() && settings_.controlAndroid && !controlHintShown_) {
+            controlHintShown_ = true;
+            showToast(L"Click to tap, right-click for Back, middle-click for Home");
+        }
         mirrorActive_ = true;
         haveFrame_ = false;
         paused_ = false;
@@ -858,6 +926,7 @@ void App::onFrame() {
         if (FAILED(rt_->CreateBitmap(D2D1::SizeU(f->width, f->height), bp, &video_))) return;
         videoW_ = f->width;
         videoH_ = f->height;
+        if (clientIsAndroid()) loadKeymap();  // zones are kept per phone and per orientation
         mn::logf(mn::LogLevel::Info, "video size %dx%d", videoW_, videoH_);
     }
     video_->CopyFromMemory(nullptr, f->pixels.data(), f->stride);
