@@ -15,6 +15,7 @@
 
 - **Screen mirroring** from iPhone and iPad, up to 4K and 60 fps
 - **Android phones over USB**: plug the phone in and it mirrors, screen and sound
+- **Android phones over Wi-Fi**: pair once with a QR code, then mirror without a cable
 - **iPhone over USB**, through Personal Hotspot (same Screen Mirroring flow, no Wi-Fi needed)
 - **Audio**, both while mirroring and for music-only AirPlay (ALAC, AAC, AAC-ELD)
 - **Now Playing** view with artwork, title, artist and progress when streaming music
@@ -49,6 +50,19 @@ To stream music only, pick the PC from the AirPlay menu in Control Center or in 
 Sound comes through on Android 11 and later (the phone's own speaker goes quiet while mirroring).
 Turn it off in **Settings → Cable (USB) → Android phones** if you don't want phones to mirror when plugged in.
 
+### Android over Wi-Fi
+
+Android 11 and later can do the same over Wi-Fi, through *Wireless debugging*:
+
+1. Connect the phone to the same Wi-Fi network as the PC, and turn on Developer options (see above).
+2. In Mirrorly, click **Pair over Wi-Fi** on the home screen (or **Settings → Android → Pair**). A QR code appears.
+3. On the phone: **Settings → System → Developer options → Wireless debugging** → turn it on →
+   **Pair device with QR code**, and scan the code. Mirroring starts as soon as the phone is paired.
+
+You only pair once. Afterwards, whenever Wireless debugging is on, the phone shows up on the home screen
+as *available over Wi-Fi*: click **Mirror**. Many phones turn Wireless debugging off when they change network
+or restart; turn it back on from Developer options (or its Quick Settings tile).
+
 ### iPhone
 
 iOS has no public way for a PC to receive the screen over USB, but AirPlay works over the cable:
@@ -82,7 +96,9 @@ Click the gear icon:
 | Full screen on start | Go full screen as soon as mirroring begins |
 | Play sound | Play the phone's sound on the PC |
 | Windows Firewall | Lets Mirrorly through the firewall on all network types (asks for admin approval) |
-| Cable (USB): Android phones | Mirror Android phones as soon as they are plugged in |
+| Android: USB cable | Mirror Android phones as soon as they are plugged in |
+| Android: Wi-Fi | Show phones paired over Wi-Fi when their Wireless debugging is on |
+| Android: Pair a phone over Wi-Fi | Shows the pairing QR code |
 | Theme | Default or Acid poster; more can be added (see below) |
 
 Settings are saved in `%APPDATA%\Mirrorly\settings.ini`.
@@ -98,6 +114,8 @@ Settings are saved in `%APPDATA%\Mirrorly\settings.ini`.
 | Android phone plugged in, nothing happens | Check that USB debugging is on and the cable carries data (not charge-only). Some phones need their maker's USB driver on Windows (e.g. Samsung USB Driver). |
 | Android: "Tap Allow on your phone" | Unlock the phone and accept the *Allow USB debugging?* prompt. |
 | Android mirrors without sound | Sound needs Android 11 or later. |
+| Paired Android phone doesn't show up over Wi-Fi | Check that Wireless debugging is still on and the phone is on the same network. Click **Settings → Windows Firewall → Allow** so the PC can see the phone. |
+| Pairing waits forever | The phone and the PC must be on the same network (no guest Wi-Fi or client isolation). Turn Wireless debugging off and on, then scan again. |
 
 Mirrorly writes a `Mirrorly.log` next to the exe (or in `%APPDATA%\Mirrorly`). Check it first when something goes wrong.
 
@@ -110,7 +128,7 @@ iPhone ──mDNS──▶ discovery        (_airplay._tcp, _raop._tcp)
        ──TCP───▶ screen stream    (H.264, AES-128-CTR)
        ──UDP───▶ audio stream     (RTP, AAC-ELD / ALAC, AES-128-CBC)
                                     │
-Android ─USB─▶ adb ─▶ scrcpy server on the phone (H.264 + PCM over an adb tunnel)
+Android ─USB / Wi-Fi─▶ adb ─▶ scrcpy server on the phone (H.264 + PCM over an adb tunnel)
                                     │
                          FFmpeg decode → Direct2D (video) / waveOut (audio)
 ```
@@ -120,15 +138,19 @@ For Android, Mirrorly talks to the adb server directly (host protocol over TCP),
 already running (Android Studio, for example) it is reused; otherwise Mirrorly starts the adb bundled in the exe
 (unpacked to `%LOCALAPPDATA%\Mirrorly`) and stops it again on exit.
 
+Over Wi-Fi, Mirrorly shows the QR code that Android's *Pair device with QR code* expects
+(`WIFI:T:ADB;S:<name>;P:<password>;;`), finds the phone's `_adb-tls-pairing._tcp` and `_adb-tls-connect._tcp`
+services with its own mDNS browser, and asks adb to pair and connect (`host:pair`, `host:connect`).
+
 ## Project layout
 
 ```
 src/core/          AirPlay engine (portable C++17, also builds on Linux)
-  mdns.*             mDNS / DNS-SD responder
+  mdns.*             mDNS / DNS-SD responder and browser
   receiver.*         RTSP server: /info, pairing, FairPlay, SETUP, TEARDOWN
   streams.*          mirroring video, RTP audio, NTP timing
   adb.*              adb host-protocol client (devices, push, forward, shell)
-  android_mirror.*   wired Android mirroring (scrcpy server streams)
+  android_mirror.*   Android mirroring over USB and Wi-Fi (scrcpy server streams, pairing)
   plist.*            binary property-list reader/writer
   crypto.*           SHA-512, AES, Ed25519, X25519
   native_media.c     FairPlay + FFmpeg decoding
@@ -140,7 +162,7 @@ src/app/           Windows app (Win32, Direct2D, DirectWrite, waveOut)
   themes.cpp         theme registry
   android_usb.cpp    bundled adb, iPhone-over-USB detection
 tests/             simulated iPhone and Android phone for end-to-end tests
-third_party/       playfair, Monocypher, tiny-AES
+third_party/       playfair, Monocypher, tiny-AES, qrcodegen
 res/               icon, manifest, resources
 ```
 
@@ -195,7 +217,8 @@ ffmpeg -f lavfi -i testsrc2=size=1014x1440:rate=30 -frames:v 10 -c:v libx264 -bf
 ```
 
 `tests/android_usb.cpp` runs the USB engine against a fake adb server with a fake phone behind it
-(plugging in, *Allow USB debugging*, mirroring, closing, re-plugging, phones without sound):
+(plugging in, *Allow USB debugging*, mirroring, closing, re-plugging, phones without sound, pairing over Wi-Fi
+with a QR code and reconnecting later):
 
 ```bash
 ./out/linux/android_usb /path/to/testmedia/video.h264
@@ -212,6 +235,7 @@ The test media folder for `fake_iphone` needs these files:
 - [UxPlay](https://github.com/FDH2/UxPlay) and [RPiPlay](https://github.com/FD-/RPiPlay): reference for the AirPlay protocol
 - [scrcpy](https://github.com/Genymobile/scrcpy) (Apache 2.0): the server that runs on Android phones
 - [Android platform tools](https://developer.android.com/tools/releases/platform-tools) (Apache 2.0): adb
+- [QR Code generator](https://github.com/nayuki/QR-Code-generator) by Project Nayuki (MIT): the pairing QR code
 - playfair (from shairplay): FairPlay handshake
 - [FFmpeg](https://ffmpeg.org): H.264 and audio decoding
 - [Monocypher](https://monocypher.org) and [tiny-AES-c](https://github.com/kokke/tiny-AES-c): cryptography

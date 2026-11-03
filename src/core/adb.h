@@ -36,6 +36,11 @@ public:
     // Starts a shell command and returns the socket streaming its output (caller closes).
     sock_t shell(const std::string& serial, const std::string& command);
 
+    // Wireless debugging (Android 11+). Both return the server's reply text, e.g.
+    // "Successfully paired to 192.168.1.20:37099 [guid=...]" or "connected to 192.168.1.20:41235".
+    bool pair(const std::string& hostPort, const std::string& code, std::string& reply);
+    bool connect(const std::string& hostPort, std::string& reply);
+
     // Asks the adb server to exit.
     void killServer();
 
@@ -45,7 +50,8 @@ public:
 
 private:
     sock_t connectServer();
-    bool request(sock_t s, const std::string& service);  // sends + reads OKAY/FAIL
+    bool request(sock_t s, const std::string& service, int timeoutMs = 10000);  // sends + reads OKAY/FAIL
+    bool query(const std::string& service, std::string& reply, int timeoutMs);
     sock_t openTransport(const std::string& serial);
     uint16_t port_;
     std::string error_;

@@ -162,7 +162,8 @@ public:
         // cable (USB) line under the status
         std::wstring action;
         bool attention = false;
-        std::wstring wired = a.wiredHint(action, attention);
+        int actionHit = H_USB_ACTION;
+        std::wstring wired = a.wiredHint(action, attention, actionHit);
         if (!wired.empty()) {
             float wy = sy + 34;
             IDWriteTextFormat* wf = a.fmt(14);
@@ -175,10 +176,10 @@ public:
                 for (auto& c : label) c = towupper(c);
                 float lw = a.pixelTextWidth(label, 1.5f);
                 D2D1_RECT_F br = D2D1::RectF(bx + 44 + tw + 14, wy - 12, bx + 44 + tw + 14 + lw + 20, wy + 12);
-                bool hov = a.hover_ == H_USB_ACTION;
+                bool hov = a.hover_ == actionHit;
                 a.fillRect(br, hov ? COBALT : INK);
                 a.pixelText(label, br.left + 10, wy - 5.25f, 1.5f, hov ? WHITE : ACID);
-                a.addHit(H_USB_ACTION, br);
+                a.addHit(actionHit, br);
             }
             sy = wy;
         }
@@ -290,6 +291,64 @@ public:
         std::wstring st = !a.settings_.audio ? L"Sound is off in Settings" : (a.muted_ ? L"Muted" : L"Playing on this PC");
         a.text(st, D2D1::RectF(cx + 46, y - 12, cx + cw, y + 12), a.fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD), a.settings_.audio ? INK2 : ALERT);
         if (a.volumeOpen_) volumePopover(a, D2D1::RectF(cx, y - 18, cx + 36, y + 18), false, 1.0f, W, H, false);
+    }
+
+    // ---------------------------------------------------------------- pairing over Wi-Fi
+    void drawPairing(App& a, float W, float H) override {
+        a.fillRect(D2D1::RectF(0, 0, W, H), PAPER);
+        a.giantType(L"WIFI", -W * 0.03f, H * 0.38f, H * 0.62f, ACID, 0.9f);
+        a.drawGrain(W, H, 0.55f);
+        squareButton(a, H_PAIR_CLOSE, G_BACK, 38, 34, 36, 1.0f, false, false);
+        a.pixelText(L"PAIR A PHONE", 72, 23.5f, 3.0f, INK);
+
+        const float qrSide = 232;
+        float bx = std::max(28.0f, W * 0.075f);
+        bool wide = W >= 720;
+        float qx = wide ? W - bx - qrSide : bx;
+        float top = 104;
+        // steps
+        const wchar_t* titles[3] = {L"Same Wi-Fi as this PC", L"Developer options > Wireless debugging",
+                                    L"Pair device with QR code, then scan"};
+        float y = top + 12;
+        float tw = wide ? qx - bx - 40 : W - bx * 2;
+        for (int i = 0; i < 3; i++) {
+            a.fillRect(D2D1::RectF(bx, y - 13, bx + 26, y + 13), INK);
+            a.pixelText(std::to_wstring(i + 1), bx + 13 - 4.5f, y - 5.25f, 1.5f, ACID);
+            a.text(titles[i], D2D1::RectF(bx + 38, y - 14, bx + 38 + tw, y + 14), a.fmt(17, DWRITE_FONT_WEIGHT_SEMI_BOLD), INK);
+            y += 48;
+        }
+        // QR in an inked box with a hard shadow
+        float qy = wide ? top : y + 6;
+        D2D1_RECT_F q = D2D1::RectF(qx, qy, qx + qrSide, qy + qrSide);
+        a.fillRect(D2D1::RectF(q.left + 6, q.top + 6, q.right + 6, q.bottom + 6), INK);
+        a.fillRect(q, 0xFFFFFF);
+        a.strokeRect(q, INK, 1.0f, 0, 2.0f);
+        bool busy, error;
+        std::wstring status = a.pairingText(busy, error);
+        if (a.pair_.phase == mn::PairingStatus::Waiting && !a.pair_.qr.empty()) {
+            a.drawQr(a.pair_.qr, D2D1::RectF(q.left + 8, q.top + 8, q.right - 8, q.bottom - 8), INK, 0xFFFFFF);
+        } else {
+            a.drawHalftoneOrb((q.left + q.right) / 2, (q.top + q.bottom) / 2, qrSide * 0.3f, a.animTime() * 1.5,
+                              busy ? 1.0f : 0.0f, error ? ALERT : COBALT, ACID);
+        }
+        // status
+        float sy = std::max(y + 10, wide ? q.bottom + 40 : q.bottom + 40);
+        if (wide) sy = std::max(y + 20, top + 3 * 48 + 30);
+        bool blink = busy && fmod(a.animTime() * 2.0, 1.0) > 0.5;
+        D2D1_RECT_F m = D2D1::RectF(bx, sy - 7, bx + 14, sy + 7);
+        if (!blink) a.fillRect(m, error ? ALERT : busy ? COBALT : ACID);
+        a.strokeRect(m, INK, 1.0f, 0, 1.5f);
+        a.text(status, D2D1::RectF(bx + 24, sy - 14, (wide ? qx - 20 : W - 28), sy + 14), a.fmt(16, DWRITE_FONT_WEIGHT_SEMI_BOLD), INK);
+        if (error) {
+            float lw = a.pixelTextWidth(L"TRY AGAIN", 2.0f);
+            D2D1_RECT_F br = D2D1::RectF(bx, sy + 26, bx + lw + 28, sy + 58);
+            bool hov = a.hover_ == H_PAIR_RETRY;
+            a.fillRect(br, hov ? COBALT : INK);
+            a.pixelText(L"TRY AGAIN", br.left + 14, br.top + 9, 2.0f, hov ? WHITE : ACID);
+            a.addHit(H_PAIR_RETRY, br);
+        }
+        a.text(L"Pair once. After that the phone shows up whenever Wireless debugging is on. Android 11+.",
+               D2D1::RectF(bx, H - 44, W - 28, H - 22), a.fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD), INK2);
     }
 
     // ---------------------------------------------------------------- mirroring

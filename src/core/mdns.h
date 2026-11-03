@@ -54,4 +54,42 @@ private:
     std::string error_;
 };
 
+// A service instance found on the network by MdnsBrowser.
+struct MdnsFound {
+    std::string instance;  // first label, e.g. "adb-1A2B3C-xyz"
+    std::string type;      // e.g. "_adb-tls-connect._tcp"
+    std::string host;      // target host name
+    uint32_t ip = 0;       // IPv4, network byte order
+    uint16_t port = 0;
+    uint64_t seen = 0;     // now_ms() of the last answer
+};
+
+// Minimal DNS-SD browser: asks for some service types now and then and keeps what the
+// network answers (and announces). Shares UDP 5353 with the responder.
+class MdnsBrowser {
+public:
+    ~MdnsBrowser() { stop(); }
+    bool start(const std::vector<std::string>& types);
+    void stop();
+    bool running() const { return running_; }
+    void queryNow() { nextQuery_ = 0; }
+    // Resolved instances of a type (address and port known), seen within maxAgeMs.
+    std::vector<MdnsFound> find(const std::string& type, uint64_t maxAgeMs = 120000);
+
+private:
+    void loop();
+    void sendQueries();
+    void handlePacket(const uint8_t* d, size_t n);
+    sock_t sock_ = MN_INVALID_SOCKET;
+    std::atomic<bool> running_{false};
+    std::thread thread_;
+    std::mutex m_;
+    std::vector<std::string> types_;
+    struct Inst { std::string label, type, host; uint16_t port = 0; uint64_t seen = 0; bool srv = false; };
+    std::vector<Inst> insts_;
+    std::vector<std::pair<std::string, uint32_t>> hosts_;  // host name (lower case) -> ip
+    std::vector<uint32_t> joined_;
+    uint64_t nextQuery_ = 0, lastIfaceCheck_ = 0;
+};
+
 }  // namespace mn

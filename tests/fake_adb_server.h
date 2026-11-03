@@ -70,13 +70,38 @@ public:
     // Simulates the phone ending the stream (e.g. the scrcpy server dies).
     void dropStreams() { dropGen_++; }
 
+    // Wireless debugging: "host:pair:<code>:<ip:port>" succeeds with this code; once paired,
+    // "host:connect:<ip:port>" adds the phone as a Wi-Fi device with serial <ip:port>.
+    std::string pairCode;
+    std::atomic<int> pairs{0}, connects{0};
+    std::string wifiSerial() {
+        std::lock_guard<std::mutex> lk(m_);
+        return wifiSerial_;
+    }
+    void dropWifi() {
+        std::lock_guard<std::mutex> lk(m_);
+        wifiSerial_.clear();
+        listVersion_++;
+    }
+
 private:
     std::string listText() {
         std::lock_guard<std::mutex> lk(m_);
-        if (state_.empty()) return "";
+        std::string t;
         if (state_ == "device")
-            return serial + "\tdevice usb:1-1 product:fake model:" + model + " device:fake transport_id:3\n";
-        return serial + "\t" + state_ + " usb:1-1 transport_id:3\n";
+            t += serial + "\tdevice usb:1-1 product:fake model:" + model + " device:fake transport_id:3\n";
+        else if (!state_.empty())
+            t += serial + "\t" + state_ + " usb:1-1 transport_id:3\n";
+        if (!wifiSerial_.empty())
+            t += wifiSerial_ + "\tdevice product:fake model:" + model + " device:fake transport_id:4\n";
+        return t;
+    }
+    // which known serial a "host-serial:<serial>:..." / "host:transport:<serial>" request names
+    std::string matchSerial(const std::string& rest) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (!wifiSerial_.empty() && rest.compare(0, wifiSerial_.size(), wifiSerial_) == 0) return wifiSerial_;
+        if (rest.compare(0, serial.size(), serial) == 0) return serial;
+        return "";
     }
 
     void spawn(std::function<void()> f) {
@@ -132,7 +157,30 @@ private:
                     if (recv(c, &b, 1, 0) <= 0) break;
                 }
             }
-        } else if (req == "host:transport:" + serial) {
+        } else if (req.compare(0, 10, "host:pair:") == 0) {
+            // host:pair:<code>:<ip:port>
+            std::string rest = req.substr(10);
+            std::string code = rest.substr(0, rest.find(':')), hp = rest.substr(rest.find(':') + 1);
+            bool good = code == pairCode || pairCode == "*";
+            std::string r = good ? "Successfully paired to " + hp + " [guid=adb-FAKEWIFI]" : "Failed: Wrong password or connection was dropped.";
+            if (good) {
+                pairs++;
+                paired_ = true;
+            }
+            sendStr(c, "OKAY" + hex4(r.size()) + r);
+        } else if (req.compare(0, 13, "host:connect:") == 0) {
+            std::string hp = req.substr(13), r;
+            connects++;
+            if (paired_) {
+                std::lock_guard<std::mutex> lk(m_);
+                wifiSerial_ = hp;
+                listVersion_++;
+                r = "connected to " + hp;
+            } else {
+                r = "failed to connect to '" + hp + "': Connection refused";
+            }
+            sendStr(c, "OKAY" + hex4(r.size()) + r);
+        } else if (req.compare(0, 15, "host:transport:") == 0 && !matchSerial(req.substr(15)).empty()) {
             sendStr(c, "OKAY");
             std::string svc;
             if (readReq(c, svc)) {
@@ -161,8 +209,8 @@ private:
                     sendStr(c, "FAIL" + hex4(m.size()) + m);
                 }
             }
-        } else if (req.compare(0, 12 + serial.size(), "host-serial:" + serial) == 0) {
-            std::string rest = req.substr(12 + serial.size() + 1);
+        } else if (req.compare(0, 12, "host-serial:") == 0 && !matchSerial(req.substr(12)).empty()) {
+            std::string rest = req.substr(12 + matchSerial(req.substr(12)).size() + 1);
             if (rest.compare(0, 12, "forward:tcp:") == 0) {
                 int port = atoi(rest.c_str() + 12);
                 sendStr(c, "OKAYOKAY");
@@ -345,6 +393,8 @@ private:
     std::string state_;
     std::atomic<int> listVersion_{0};
     std::atomic<int> dropGen_{0};
+    std::atomic<bool> paired_{false};
+    std::string wifiSerial_;
 };
 
 }  // namespace fakeadb

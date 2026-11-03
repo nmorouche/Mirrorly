@@ -191,7 +191,8 @@ public:
         // cable (USB) line
         std::wstring action;
         bool attention = false;
-        std::wstring wired = a.wiredHint(action, attention);
+        int actionHit = H_USB_ACTION;
+        std::wstring wired = a.wiredHint(action, attention, actionHit);
         if (!wired.empty()) {
             IDWriteTextFormat* wf = a.fmt(13);
             IDWriteTextFormat* af = a.fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD);
@@ -201,10 +202,10 @@ public:
             a.text(wired, D2D1::RectF(x + 22, y - 10, x + 22 + tw + 2, y + 10), wf, attention ? p.text : p.text2);
             if (!action.empty()) {
                 D2D1_RECT_F ar = D2D1::RectF(x + 22 + tw + 14, y - 10, x + 22 + tw + aw + 2, y + 10);
-                bool hov = a.hover_ == H_USB_ACTION;
+                bool hov = a.hover_ == actionHit;
                 a.text(action, ar, af, hov ? p.accentHover : p.accent);
                 if (hov) a.line(ar.left, ar.bottom - 1, ar.right - 2, ar.bottom - 1, p.accentHover, 1.0f, 1.0f);
-                a.addHit(H_USB_ACTION, D2D1::RectF(ar.left - 6, ar.top - 4, ar.right + 6, ar.bottom + 4));
+                a.addHit(actionHit, D2D1::RectF(ar.left - 6, ar.top - 4, ar.right + 6, ar.bottom + 4));
             }
             y += 34;
         }
@@ -222,6 +223,82 @@ public:
         a.text(help, lr, lf, hov ? p.accentHover : p.accent);
         if (hov) a.line(lr.left, lr.bottom - 1, lr.right, lr.bottom - 1, p.accentHover, 1.0f, 1.0f);
         a.addHit(H_FIREWALL_LINK, D2D1::RectF(lr.left - 6, lr.top - 4, lr.right + 6, lr.bottom + 4));
+    }
+
+    // ---------------------------------------------------------------- pairing over Wi-Fi
+    void drawPairing(App& a, float W, float H) override {
+        const Pal& p = pal(a);
+        a.fillRect(D2D1::RectF(0, 0, W, H), p.base);
+        circleButton(a, H_PAIR_CLOSE, G_BACK, 32, 32, 32, p.accent, p.text, 0.07f);
+        a.text(L"Pair an Android phone", D2D1::RectF(56, 14, W - 24, 50),
+               a.fmt(22, DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING, F_UI_DISPLAY), p.text);
+
+        const float qrSide = 220;
+        bool wide = W >= 700;
+        float cw = std::min(wide ? 760.0f : 440.0f, W - 48);
+        float rowH = 58;
+        float stepsW = wide ? cw - qrSide - 40 : cw;
+        float blockH = wide ? std::max(qrSide, rowH * 3) : rowH * 3 + 24 + qrSide;
+        float top = std::max(78.0f, (H - blockH - 110) / 2 + 20);
+        float x0 = (W - cw) / 2;
+
+        // steps
+        D2D1_RECT_F card = D2D1::RectF(x0, top + (wide ? (blockH - rowH * 3) / 2 : 0), x0 + stepsW, 0);
+        card.bottom = card.top + rowH * 3;
+        if (!p.dark) a.softShadow(card, 12, p.shadow, 8, 3);
+        roundFill(a, card, 12, p.card);
+        hairlineBorder(a, card, 12, p.sep, p.borderA);
+        const wchar_t* titles[3] = {L"Join the same Wi-Fi", L"Open Wireless debugging", L"Scan this code"};
+        const wchar_t* descs[3] = {L"The phone and this PC must be on the same network",
+                                   L"Settings › Developer options › Wireless debugging",
+                                   L"Tap “Pair device with QR code”, then point the camera here"};
+        for (int i = 0; i < 3; i++) {
+            float ry = card.top + rowH * i + rowH / 2;
+            a.dot(card.left + 27, ry, 11, p.accent, p.dark ? 0.22f : 0.12f);
+            a.text(std::to_wstring(i + 1), D2D1::RectF(card.left + 16, ry - 11, card.left + 38, ry + 11),
+                   a.fmt(12, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER), p.accent);
+            a.text(titles[i], D2D1::RectF(card.left + 50, ry - 19, card.right - 14, ry + 1), a.fmt(14, DWRITE_FONT_WEIGHT_SEMI_BOLD), p.text);
+            a.text(descs[i], D2D1::RectF(card.left + 50, ry + 1, card.right - 14, ry + 19), a.fmt(12), p.text2);
+            if (i > 0) a.line(card.left + 50, card.top + rowH * i, card.right, card.top + rowH * i, p.sep, p.sepA, 1.0f);
+        }
+
+        // QR code (always dark on white: phone cameras read that best)
+        D2D1_RECT_F qr = wide ? D2D1::RectF(x0 + cw - qrSide, top + (blockH - qrSide) / 2, x0 + cw, top + (blockH + qrSide) / 2)
+                              : D2D1::RectF(W / 2 - qrSide / 2, card.bottom + 24, W / 2 + qrSide / 2, card.bottom + 24 + qrSide);
+        if (!p.dark) a.softShadow(qr, 16, p.shadow, 10, 4);
+        roundFill(a, qr, 16, 0xFFFFFF);
+        hairlineBorder(a, qr, 16, p.sep, p.borderA);
+        bool busy, error;
+        std::wstring status = a.pairingText(busy, error);
+        bool showQr = a.pair_.phase == mn::PairingStatus::Waiting && !a.pair_.qr.empty();
+        if (showQr) {
+            a.drawQr(a.pair_.qr, D2D1::RectF(qr.left + 10, qr.top + 10, qr.right - 10, qr.bottom - 10), 0x000000, 0xFFFFFF);
+        } else if (busy) {
+            a.activitySpinner((qr.left + qr.right) / 2, (qr.top + qr.bottom) / 2, 14, 0x6E6E73);
+        } else {
+            a.icon(error ? G_CLOSE : G_CHECK, (qr.left + qr.right) / 2, (qr.top + qr.bottom) / 2, 40, error ? p.red : p.green);
+        }
+
+        // status + actions
+        float y = std::max(card.bottom, qr.bottom) + 34;
+        IDWriteTextFormat* sf = a.fmt(14);
+        float sw = std::min(a.textWidth(status, sf), W - 80);
+        float sx = W / 2 - (sw + 18) / 2;
+        if (busy) a.activitySpinner(sx + 6, y, 7, p.text2);
+        else a.dot(sx + 5, y, 4, error ? p.red : p.green);
+        a.text(status, D2D1::RectF(sx + 18, y - 11, sx + 18 + sw + 4, y + 11), sf, error ? p.text : p.text2);
+        y += 34;
+        if (error) {
+            float bw = 120;
+            D2D1_RECT_F b = D2D1::RectF(W / 2 - bw / 2, y - 16, W / 2 + bw / 2, y + 16);
+            bool hov = a.hover_ == H_PAIR_RETRY;
+            roundFill(a, b, 8, hov ? p.accentHover : p.accent);
+            a.text(L"Try again", b, a.fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER), 0xFFFFFF);
+            a.addHit(H_PAIR_RETRY, b);
+            y += 40;
+        }
+        a.text(L"Pair once: afterwards the phone appears in Mirrorly whenever Wireless debugging is on.",
+               D2D1::RectF(24, y - 9, W - 24, y + 9), a.fmt(12, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER), p.text3);
     }
 
     // ---------------------------------------------------------------- now playing

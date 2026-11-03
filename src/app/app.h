@@ -51,12 +51,13 @@ static inline D2D1_COLOR_F rgb(uint32_t c, float a = 1.0f) {
 // icon glyphs (Segoe Fluent Icons / Segoe MDL2 Assets)
 static const wchar_t G_SETTINGS = 0xE713, G_BACK = 0xE72B, G_CLOSE = 0xE711, G_FULL = 0xE740, G_WINDOW = 0xE73F,
                      G_VOLUME = 0xE767, G_MUTE = 0xE74F, G_MUSIC = 0xE8D6, G_SHIELD = 0xEA18, G_LOCK = 0xE72E,
-                     G_CHECK = 0xE73E, G_USB = 0xE88E;
+                     G_CHECK = 0xE73E, G_USB = 0xE88E, G_WIFI = 0xE701;
 
 // ------------------------------------------------------------------ events from the engine
 enum EvType {
     EV_CONNECTING, EV_SESSION_START, EV_SESSION_END, EV_MIRROR_START, EV_MIRROR_STOP, EV_PAUSED, EV_AUDIO_START,
-    EV_AUDIO_STOP, EV_VOLUME, EV_METADATA, EV_ARTWORK, EV_PROGRESS, EV_FIREWALL_DONE, EV_ANDROID_STATUS
+    EV_AUDIO_STOP, EV_VOLUME, EV_METADATA, EV_ARTWORK, EV_PROGRESS, EV_FIREWALL_DONE, EV_ANDROID_STATUS,
+    EV_PAIRING
 };
 struct Event {
     EvType type;
@@ -73,7 +74,7 @@ struct Event {
 enum Hit {
     H_NONE, H_SETTINGS, H_BACK, H_FIREWALL, H_RES0, H_RES1, H_RES2, H_RES3, H_FPS30, H_FPS60, H_AUDIO, H_AUTOFS,
     H_MUTE, H_FULLSCREEN, H_DISCONNECT, H_OPENLOG, H_FIREWALL_LINK, H_NAMEBOX, H_THEME_STRIP, H_ANDROID, H_USB_ACTION,
-    H_VOL_POPOVER, H_VOL_ICON, H_VOL_SLIDER,
+    H_VOL_POPOVER, H_VOL_ICON, H_VOL_SLIDER, H_ANDROID_WIFI, H_PAIR, H_PAIR_CLOSE, H_PAIR_RETRY,
     H_THEME = 100
 };
 
@@ -110,6 +111,8 @@ public:
     virtual void drawMirrorPaused(App&, float W, float H, D2D1_RECT_F video) = 0;
     virtual void drawMirrorOverlay(App&, float W, float H, float alpha, D2D1_RECT_F video) = 0;
     virtual void drawToast(App&, float W, float H, const std::wstring& msg, float alpha) = 0;
+    // pairing an Android phone over Wi-Fi: steps, QR code (App::drawQr) and progress
+    virtual void drawPairing(App&, float W, float H) = 0;
     // thumbnail for the theme picker
     virtual void drawPreview(App&, D2D1_RECT_F r) = 0;
 
@@ -167,7 +170,10 @@ public:
     void onProgress(double pos, double dur) override { post(EV_PROGRESS, [&](Event& e) { e.d1 = pos; e.d2 = dur; }); }
     // AndroidStatusListener (engine threads)
     void onAndroidStatus(const mn::AndroidStatus& s) override {
-        post(EV_ANDROID_STATUS, [&](Event& e) { e.i = (int)s.state; e.s1 = s.device; e.s2 = s.detail; });
+        post(EV_ANDROID_STATUS, [&](Event& e) { e.i = (int)s.state; e.s1 = s.device; e.s2 = s.detail; e.b = s.wireless; });
+    }
+    void onPairingStatus(const mn::PairingStatus& p) override {
+        post(EV_PAIRING, [&](Event& e) { e.i = (int)p.phase; e.s1 = p.qr; e.s2 = p.device; e.s3 = p.detail; });
     }
 
     static App* instance;
@@ -207,7 +213,9 @@ public:
     bool launchAdb();
     void stopAdb();
     void checkUsbIphone();
-    bool clientIsUsb() const { return client_.ip == "USB"; }
+    bool clientIsAndroid() const { return client_.model == "Android"; }
+    void openPairing();
+    void closePairing();
 
     // ---- rendering (render.cpp)
     bool createDeviceResources();
@@ -254,7 +262,10 @@ public:
     std::wstring primaryIp() const;
     std::wstring videoInfo() const;
     // one line about cable connections for the home screen; action = button label (may be empty)
-    std::wstring wiredHint(std::wstring& action, bool& attention) const;
+    std::wstring wiredHint(std::wstring& action, bool& attention, int& actionHit) const;
+    std::wstring pairingText(bool& busy, bool& error) const;
+    // draws a QR code for text, centred in r (quiet zone included)
+    void drawQr(const std::string& text, D2D1_RECT_F r, uint32_t fg, uint32_t bg);
     std::wstring androidSettingsText() const;
 
     // ---- state
@@ -308,6 +319,8 @@ public:
     int audioRate_ = 44100;
     mn::AndroidMirror android_{rx_};
     mn::AndroidStatus usbStatus_;
+    bool pairingOpen_ = false;
+    mn::PairingStatus pair_;
     bool iphoneUsb_ = false;        // an iPhone shares its connection over USB (Personal Hotspot)
     uint64_t ifaceCheck_ = 0;
     std::atomic<bool> startedAdb_{false};

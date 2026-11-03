@@ -12,10 +12,10 @@ IFS=. read -r V1 V2 V3 _ <<< "$VERSION"
 VER_NUM="${V1:-0},${V2:-0},${V3:-0},0"
 CXX=x86_64-w64-mingw32-g++-posix
 OUT=out/win; mkdir -p $OUT/obj
-INC="-I src/core -I src/app -I third_party/playfair -I third_party/monocypher -I third_party/tinyaes -I $FF/include"
+INC="-I src/core -I src/app -I third_party/qrcodegen -I third_party/playfair -I third_party/monocypher -I third_party/tinyaes -I $FF/include"
 BUILD=${BUILD:-$(git rev-parse --short HEAD 2>/dev/null || echo dev)}
 CFLAGS="-O2 -DNDEBUG -DMIRRORLY_BUILD=\"$BUILD\" -DMIRRORLY_VERSION=\"$VERSION\" -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 $INC"
-for f in third_party/playfair/*.c third_party/monocypher/*.c third_party/tinyaes/aes.c src/core/native_media.c; do
+for f in third_party/playfair/*.c third_party/monocypher/*.c third_party/tinyaes/aes.c third_party/qrcodegen/qrcodegen.c src/core/native_media.c; do
   o=$OUT/obj/$(basename $f .c).o; [ $o -nt $f ] || $CC $CFLAGS -c $f -o $o
 done
 for f in src/core/*.cpp src/app/*.cpp; do

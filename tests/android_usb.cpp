@@ -13,6 +13,7 @@
 #include "android_mirror.h"
 #include "fake_adb_server.h"
 #include "log.h"
+#include "mdns.h"
 #include "receiver.h"
 
 using namespace mn;
@@ -31,7 +32,10 @@ struct Listener : ReceiverListener, AndroidStatusListener {
     std::atomic<long> pcmFrames{0};
     std::atomic<double> energy{0};
     std::mutex m;
-    std::string client, model;
+    std::string client, model, clientIp;
+    std::atomic<int> pairPhase{0};
+    std::string qr, pairDevice, pairDetail;
+    bool lastWireless = false;
     std::vector<AndroidState> states;
     std::string lastDevice;
     int lastW = 0, lastH = 0;
@@ -41,6 +45,7 @@ struct Listener : ReceiverListener, AndroidStatusListener {
         std::lock_guard<std::mutex> lk(m);
         client = c.name;
         model = c.model;
+        clientIp = c.ip;
     }
     void onSessionEnd() override { sessionEnds++; }
     void onMirrorStart() override { mirrorStarts++; }
@@ -67,6 +72,16 @@ struct Listener : ReceiverListener, AndroidStatusListener {
         std::lock_guard<std::mutex> lk(m);
         states.push_back(s.state);
         lastDevice = s.device;
+        lastWireless = s.wireless;
+    }
+    void onPairingStatus(const PairingStatus& p) override {
+        static const char* names[] = {"Idle", "Waiting", "Pairing", "Connecting", "Done", "Failed"};
+        printf("  [pairing] %s %s %s\n", names[p.phase], p.device.c_str(), p.detail.c_str());
+        std::lock_guard<std::mutex> lk(m);
+        if (!p.qr.empty()) qr = p.qr;
+        pairDevice = p.device;
+        pairDetail = p.detail;
+        pairPhase = p.phase;
     }
     bool saw(AndroidState st) {
         std::lock_guard<std::mutex> lk(m);
@@ -185,8 +200,62 @@ int main(int argc, char** argv) {
     am.mirrorAgain();
     CHECK(waitFor([&] { return L.frames > f0 + 10; }, 10000), "video still mirrors");
     CHECK(L.audioStarts == a0, "no audio session");
+    adb.audio = true;
+
+    printf("== pairing over Wi-Fi (QR code)\n");
+    am.disconnect();
+    waitFor([&] { return L.sessionEnds == 5; }, 3000);
+    adb.setState("");  // cable unplugged
+    CHECK(waitFor([&] { return L.last() == AndroidState::Waiting; }, 3000), "unplugged");
+    am.startPairing();
+    CHECK(waitFor([&] { return L.pairPhase == PairingStatus::Waiting && !L.qr.empty(); }, 2000), "QR code: %s", L.qr.c_str());
+    std::string svcName, code;
+    {
+        size_t a = L.qr.find(";S:"), b = L.qr.find(";P:");
+        CHECK(L.qr.compare(0, 13, "WIFI:T:ADB;S:") == 0 && a != std::string::npos && b != std::string::npos, "QR uses the ADB pairing format");
+        svcName = L.qr.substr(a + 3, b - a - 3);
+        code = L.qr.substr(b + 3, L.qr.find(';', b + 3) - b - 3);
+    }
+    adb.pairCode = code;
+    // the phone scanned the code: it advertises the pairing service under that name
+    MdnsResponder phone;
+    MdnsService pairing;
+    pairing.instance = svcName;
+    pairing.type = "_adb-tls-pairing._tcp";
+    pairing.port = 37099;
+    CHECK(phone.start("fake-android-phone", {pairing}), "phone advertises %s._adb-tls-pairing._tcp", svcName.c_str());
+    CHECK(waitFor([&] { return adb.pairs == 1; }, 15000), "paired through adb with the code from the QR");
+    // after pairing, the phone advertises its Wireless debugging connect service
+    MdnsService conn;
+    conn.instance = "adb-FAKEWIFI-x1y2z3";
+    conn.type = "_adb-tls-connect._tcp";
+    conn.port = 41000;
+    phone.update({conn});
+    int s0 = L.sessionStarts;
+    CHECK(waitFor([&] { return L.pairPhase == PairingStatus::Done; }, 15000), "pairing done (%s)", L.pairDevice.c_str());
+    CHECK(waitFor([&] { return L.sessionStarts == s0 + 1 && L.frames > 0; }, 10000) && L.clientIp == "Wi-Fi",
+          "mirroring starts over Wi-Fi right after pairing (serial %s)", adb.wifiSerial().c_str());
+    CHECK(adb.wifiSerial().find(":41000") != std::string::npos, "connected to the phone's Wireless debugging port");
+    CHECK(adb.lastShell.find("video_bit_rate=8000000") != std::string::npos, "lower bit rate over Wi-Fi");
+
+    printf("== Wi-Fi phone comes back later\n");
+    am.disconnect();
+    waitFor([&] { return L.sessionEnds == 6; }, 3000);
+    adb.dropWifi();  // left the network
+    CHECK(waitFor([&] { return L.last() == AndroidState::Waiting; }, 3000), "status: waiting");
+    int c0 = adb.connects;
+    CHECK(waitFor([&] { return !adb.wifiSerial().empty(); }, 15000) && adb.connects > c0, "reconnects to the paired phone on its own");
+    CHECK(waitFor([&] { return L.last() == AndroidState::Ready && L.lastWireless; }, 3000),
+          "status: available over Wi-Fi, waits for the user");
+    sleep_ms(1000);
+    CHECK(L.sessionStarts == s0 + 1, "no automatic mirroring over Wi-Fi");
+    f0 = L.frames;
+    am.mirrorAgain();
+    CHECK(waitFor([&] { return L.sessionStarts == s0 + 2 && L.frames > f0 + 5; }, 10000), "\"Mirror\" starts it");
+    phone.stop();
+
     am.stop();
-    CHECK(L.sessionEnds == 5, "stop() ends the session");
+    CHECK(L.sessionEnds == 7, "stop() ends the session");
 
     printf("== adb not available\n");
     {
