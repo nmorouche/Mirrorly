@@ -79,13 +79,20 @@ public:
 private:
     void loop();
     void sendQueries();
-    void handlePacket(const uint8_t* d, size_t n);
+    void handlePacket(const uint8_t* d, size_t n, uint32_t fromIp);
     sock_t sock_ = MN_INVALID_SOCKET;
     std::atomic<bool> running_{false};
     std::thread thread_;
     std::mutex m_;
     std::vector<std::string> types_;
-    struct Inst { std::string label, type, host; uint16_t port = 0; uint64_t seen = 0; bool srv = false; };
+    struct Inst {
+        std::string label, type, host;
+        uint16_t port = 0;
+        uint64_t seen = 0;
+        bool srv = false;
+        uint32_t from = 0;     // address the answer came from (used when no A record is sent)
+        bool logged = false;
+    };
     std::vector<Inst> insts_;
     std::vector<std::pair<std::string, uint32_t>> hosts_;  // host name (lower case) -> ip
     std::vector<uint32_t> joined_;

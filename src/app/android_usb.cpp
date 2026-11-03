@@ -95,6 +95,8 @@ mn::AndroidConfig App::androidConfig() const {
     c.enabled = settings_.usbAndroid || settings_.wifiAndroid;
     c.usb = settings_.usbAndroid;
     c.wireless = settings_.wifiAndroid;
+    c.control = settings_.controlAndroid || settings_.gamepadAndroid;
+    c.clipboard = settings_.controlAndroid;
     int w = 1920, h = 1080;
     settings_.resolutionSize(w, h);
     c.maxSize = std::max(w, h);

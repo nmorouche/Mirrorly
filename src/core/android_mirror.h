@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <string>
@@ -17,6 +18,7 @@
 #include <vector>
 
 #include "adb.h"
+#include "android_control.h"
 #include "mdns.h"
 #include "receiver.h"
 
@@ -35,6 +37,8 @@ struct AndroidConfig {
     bool audio = true;
     int videoBitRate = 12000000;
     bool wireless = true;  // connect to paired phones over Wi-Fi (Wireless debugging, Android 11+)
+    bool control = true;   // mouse, keyboard and game controllers control the phone
+    bool clipboard = true; // share the clipboard both ways (needs control)
 };
 
 enum class AndroidState {
@@ -73,6 +77,8 @@ public:
     virtual ~AndroidStatusListener() {}
     virtual void onAndroidStatus(const AndroidStatus&) = 0;
     virtual void onPairingStatus(const PairingStatus&) {}
+    // The phone's clipboard changed (text copied or cut on the phone). Called on a network thread.
+    virtual void onPhoneClipboard(const std::string&) {}
 };
 
 class AndroidMirror {
@@ -95,6 +101,11 @@ public:
     // The user wants to mirror the plugged-in phone again.
     void mirrorAgain();
     bool active() const { return sessionActive_; }
+    // The control channel of the current session (null when not mirroring or control is off).
+    std::shared_ptr<AndroidControl> control() {
+        std::lock_guard<std::mutex> lk(ctlM_);
+        return control_;
+    }
     // Wi-Fi pairing with a QR code; the status comes back through onPairingStatus.
     void startPairing();
     void cancelPairing();
@@ -155,6 +166,8 @@ private:
     std::atomic<bool> sessionDone_{false};     // thread finished, waiting to be joined
     std::atomic<bool> mirroring_{false};       // video flowing to the app
     std::string sessSerial_, sessModel_, sessName_;
+    std::mutex ctlM_;
+    std::shared_ptr<AndroidControl> control_;
     std::mutex sockM_;
     std::vector<sock_t> socks_;   // to unblock reads on stop
 };

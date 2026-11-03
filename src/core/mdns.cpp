@@ -447,32 +447,49 @@ std::vector<MdnsFound> MdnsBrowser::find(const std::string& type, uint64_t maxAg
     uint64_t now = now_ms();
     for (auto& i : insts_) {
         if (!i.srv || lower(i.type) != lower(type) || now - i.seen > maxAgeMs) continue;
+        uint32_t ip = 0;
         for (auto& h : hosts_)
-            if (h.first == lower(i.host)) {
-                MdnsFound f;
-                f.instance = i.label;
-                f.type = i.type;
-                f.host = i.host;
-                f.ip = h.second;
-                f.port = i.port;
-                f.seen = i.seen;
-                out.push_back(f);
-                break;
-            }
+            if (h.first == lower(i.host)) ip = h.second;
+        if (!ip) ip = i.from;  // some phones answer without the A record: use the sender's address
+        if (!ip) continue;
+        MdnsFound f;
+        f.instance = i.label;
+        f.type = i.type;
+        f.host = i.host;
+        f.ip = ip;
+        f.port = i.port;
+        f.seen = i.seen;
+        out.push_back(f);
     }
     return out;
 }
 
 void MdnsBrowser::sendQueries() {
     std::vector<uint8_t> q = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-    q[5] = (uint8_t)types_.size();
+    int count = 0;
     for (auto& t : types_) {
         Name n = splitType(t);
         n.push_back("local");
         putName(q, n);
         putU16(q, T_PTR);
         putU16(q, 1);
+        count++;
     }
+    {
+        // also ask for the address of hosts we know a service of but not the IPv4 address
+        std::lock_guard<std::mutex> lk(m_);
+        for (auto& i : insts_) {
+            if (!i.srv || i.host.empty() || count >= 16) continue;
+            bool known = false;
+            for (auto& h : hosts_) known |= h.first == lower(i.host);
+            if (known) continue;
+            putName(q, splitType(i.host));
+            putU16(q, T_A);
+            putU16(q, 1);
+            count++;
+        }
+    }
+    q[5] = (uint8_t)count;
     auto ifs = list_ipv4_interfaces();
     sockaddr_in to{};
     to.sin_family = AF_INET;
@@ -510,11 +527,11 @@ void MdnsBrowser::loop() {
         sockaddr_in from{};
         socklen_t fl = sizeof(from);
         int r = recvfrom(sock_, (char*)buf.data(), (int)buf.size(), 0, (sockaddr*)&from, &fl);
-        if (r > 12) handlePacket(buf.data(), (size_t)r);
+        if (r > 12) handlePacket(buf.data(), (size_t)r, from.sin_addr.s_addr);
     }
 }
 
-void MdnsBrowser::handlePacket(const uint8_t* d, size_t n) {
+void MdnsBrowser::handlePacket(const uint8_t* d, size_t n, uint32_t fromIp) {
     if (!(d[2] & 0x80)) return;  // only responses
     int qd = (d[4] << 8) | d[5];
     int rr = ((d[6] << 8) | d[7]) + ((d[8] << 8) | d[9]) + ((d[10] << 8) | d[11]);
@@ -564,7 +581,13 @@ void MdnsBrowser::handlePacket(const uint8_t* d, size_t n) {
             in.port = (uint16_t)((d[rd + 4] << 8) | d[rd + 5]);
             in.host = joinName(target);
             in.srv = true;
+            in.from = fromIp;
             in.seen = ttl == 0 ? 0 : now;
+            if (!in.logged && ttl != 0) {
+                in.logged = true;
+                LOGI("mDNS: found %s.%s on %s, port %u (host %s)", in.label.c_str(), svc.c_str(), ip_to_string(fromIp).c_str(),
+                     in.port, in.host.c_str());
+            }
         } else if (type == T_A && len == 4) {
             std::string host = lower(joinName(nm));
             uint32_t ip;

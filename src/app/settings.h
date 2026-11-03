@@ -13,6 +13,8 @@ struct Settings {
     std::wstring theme = L"default";  // id of the selected theme
     bool usbAndroid = true;           // mirror Android phones plugged in over USB
     bool wifiAndroid = true;          // connect to Android phones paired over Wi-Fi
+    bool controlAndroid = true;       // mouse, keyboard and key zones control the Android phone
+    bool gamepadAndroid = true;       // game controllers on this PC are passed to the phone
     std::string skippedUpdate;        // version the user said "Later" to (no automatic prompt for it)
     uint8_t seed[32] = {0};
     uint8_t deviceId[6] = {0};

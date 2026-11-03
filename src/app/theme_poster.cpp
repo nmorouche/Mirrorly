@@ -293,6 +293,54 @@ public:
         if (a.volumeOpen_) volumePopover(a, D2D1::RectF(cx, y - 18, cx + 36, y + 18), false, 1.0f, W, H, false);
     }
 
+    // ---------------------------------------------------------------- key zones
+    void drawKeyZone(App& a, D2D1_POINT_2F c, const std::wstring& label, int state, float al) override {
+        std::wstring up = label;
+        for (auto& ch : up) ch = towupper(ch);
+        bool pixel = true;
+        for (wchar_t ch : up)
+            if (!(ch == L' ' || ch == L'+' || (ch >= L'A' && ch <= L'Z') || (ch >= L'0' && ch <= L'9'))) pixel = false;
+        float px = state == 2 ? 1.5f : 2.0f;
+        IDWriteTextFormat* f = a.fmt(13, DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
+        float tw = pixel ? a.pixelTextWidth(up, px) : a.textWidth(label, f);
+        float h = 34, w = std::max(h, tw + 18);
+        D2D1_RECT_F r = D2D1::RectF(c.x - w / 2, c.y - h / 2, c.x + w / 2, c.y + h / 2);
+        uint32_t fill = state == 3 ? ACID : state == 2 ? COBALT : state == 1 ? ACID : INK;
+        uint32_t tc = state == 3 || state == 1 ? INK : state == 2 ? WHITE : ACID;
+        if (state != 0) a.fillRect(D2D1::RectF(r.left + 3, r.top + 3, r.right + 3, r.bottom + 3), INK, al);
+        a.fillRect(r, fill, (state == 0 ? 0.7f : 1.0f) * al);
+        a.strokeRect(r, state == 0 ? ACID : INK, al, 0, 1.5f);
+        if (state == 2 && fmod(a.animTime() * 2.0, 1.0) > 0.5) a.strokeRect(D2D1::RectF(r.left - 5, r.top - 5, r.right + 5, r.bottom + 5), ACID, al, 0, 2.0f);
+        if (pixel) a.pixelText(up, c.x - tw / 2, c.y - 3.5f * px, px, tc, al);
+        else a.text(label, r, f, tc, al);
+    }
+
+    void drawKeymapBar(App& a, float W, float H, D2D1_RECT_F video) override {
+        (void)H;
+        D2D1_RECT_F bar = D2D1::RectF(0, 0, W, 64);
+        a.fillRect(bar, INK, 0.92f);
+        a.line(0, 64, W, 64, ACID, 1.0f, 2.0f);
+        a.addHit(H_KEYMAP_BAR, bar);
+        a.pixelText(L"KEY ZONES", 22, 20, 3.0f, ACID);
+        std::wstring hint = a.zones_.empty() ? L"Click the screen where a key should tap" : L"Click to add. Drag to move. Right-click to remove.";
+        float x = 22 + a.pixelTextWidth(L"KEY ZONES", 3.0f) + 20;
+        float bx = W - 18;
+        auto btn = [&](int id, const std::wstring& t, bool primary) {
+            float w = a.pixelTextWidth(t, 2.0f) + 24;
+            D2D1_RECT_F r = D2D1::RectF(bx - w, 15, bx, 49);
+            bool hov = a.hover_ == id;
+            a.fillRect(r, primary ? (hov ? WHITE : ACID) : (hov ? COBALT : INK));
+            if (!primary) a.strokeRect(r, ACID, 1.0f, 0, 1.5f);
+            a.pixelText(t, r.left + 12, 25, 2.0f, primary ? INK : (hov ? WHITE : ACID));
+            a.addHit(id, r);
+            bx -= w + 10;
+        };
+        btn(H_KEYMAP_DONE, L"DONE", true);
+        btn(H_KEYMAP_CLEAR, L"CLEAR", false);
+        btn(H_KEYMAP_TOGGLE, a.keymapOn_ ? L"KEYS ON" : L"KEYS OFF", false);
+        a.text(hint, D2D1::RectF(x, 0, bx - 10, 64), a.fmt(14, DWRITE_FONT_WEIGHT_SEMI_BOLD), WHITE, 0.9f);
+    }
+
     // ---------------------------------------------------------------- updates
     void drawUpdateBadge(App& a, float W, float H) override {
         bool failed = a.update_.state == UPD_FAILED;
@@ -484,6 +532,10 @@ public:
         squareButton(a, H_MUTE, a.muted_ ? G_MUTE : G_VOLUME, bx, 36, 38, al, false, true);
         bx -= 46;
         squareButton(a, H_SETTINGS, G_SETTINGS, bx, 36, 38, al, false, true);
+        if (a.controlling()) {
+            bx -= 46;
+            squareButton(a, H_KEYMAP, G_KEYBOARD, bx, 36, 38, al, false, true);
+        }
         if (a.volumeOpen_) {  // the controls are at the top: open downwards
             float mx = W - 36 - 92;
             volumePopover(a, D2D1::RectF(mx - 19, 17, mx + 19, 55), true, al, W, H, true);

@@ -39,6 +39,13 @@ struct Listener : ReceiverListener, AndroidStatusListener {
     std::vector<AndroidState> states;
     std::string lastDevice;
     int lastW = 0, lastH = 0;
+    std::string phoneClip;
+    std::atomic<int> phoneClips{0};
+    void onPhoneClipboard(const std::string& t) override {
+        std::lock_guard<std::mutex> lk(m);
+        phoneClip = t;
+        phoneClips++;
+    }
 
     void onSessionStart(const ClientInfo& c) override {
         sessionStarts++;
@@ -151,7 +158,7 @@ int main(int argc, char** argv) {
     CHECK(adb.lastShell.find("com.genymobile.scrcpy.Server 5.0.1") != std::string::npos &&
               adb.lastShell.find("tunnel_forward=true") != std::string::npos &&
               adb.lastShell.find("max_size=1280") != std::string::npos && adb.lastShell.find("max_fps=30") != std::string::npos &&
-              adb.lastShell.find("audio_codec=raw") != std::string::npos && adb.lastShell.find("control=false") != std::string::npos,
+              adb.lastShell.find("audio_codec=raw") != std::string::npos,
           "server command line: %s", adb.lastShell.c_str());
     CHECK(L.sessionStarts == 1 && L.client == "Fake Phone" && L.model == "Android", "session started for \"%s\" (%s)",
           L.client.c_str(), L.model.c_str());
@@ -160,6 +167,68 @@ int main(int argc, char** argv) {
     CHECK(L.audioStarts == 1 && L.audioCt == kAudioPcm48k, "audio started as 48 kHz PCM");
     double rms = sqrt(L.energy / std::max(1L, (long)L.pcmFrames * 2));
     CHECK(rms > 4000 && rms < 7000, "audio level matches the phone's sine (rms %.0f)", rms);
+
+    printf("== controlling the phone\n");
+    {
+        auto ctl = am.control();
+        CHECK(ctl && adb.controlConns == 1, "control channel connected");
+        CHECK(adb.lastShell.find("control=false") == std::string::npos, "server started with control on");
+        adb.takeControlBytes();
+        ctl->touch(amotion::ACTION_DOWN, kPointerFinger, 100, 200, 640, 360);
+        ctl->touch(amotion::ACTION_UP, kPointerFinger, 100, 200, 640, 360);
+        ctl->key(akey::ACTION_DOWN, akey::A, 0, akey::META_CTRL);
+        ctl->text("héllo");
+        ctl->scroll(10, 20, 640, 360, 0, -1);
+        uint8_t rep[15];
+        AndroidControl::gamepadReport(rep, 0, 0, 0, 0, 0, 0, 0x0001, 0);
+        ctl->gamepadOpen(3);
+        ctl->gamepadInput(3, rep);
+        ctl->gamepadClose(3);
+        std::string got;
+        waitFor([&] { got += adb.takeControlBytes(); return got.size() >= 32 * 2 + 14 + 11 + 21 + 8 + 23 + 2 + 80 + 20 + 3; }, 3000);
+        const uint8_t* b = (const uint8_t*)got.data();
+        size_t n = got.size(), at = 0;
+        bool ok = n >= 32 && b[0] == 2 && b[1] == 0 && b[2] == 0xff && b[9] == 0xfe &&  // touch down, generic finger
+                  b[13] == 100 && b[17] == 200 && b[18] == 0x02 && b[19] == 0x80 && b[20] == 0x01 && b[21] == 0x68;
+        CHECK(ok, "touch down: finger at 100,200 of 640x360");
+        at = 64;
+        ok = n >= at + 14 && b[at] == 0 && b[at + 1] == 0 && b[at + 5] == 29 && b[at + 12] == 0x30;
+        CHECK(ok, "key: Ctrl+A as Android keycode 29 with Ctrl meta");
+        at += 14;
+        ok = n >= at + 11 && b[at] == 1 && b[at + 4] == 6 && memcmp(b + at + 5, "h\xc3\xa9llo", 6) == 0;
+        CHECK(ok, "text: UTF-8 \"h\u00e9llo\"");
+        at += 11;
+        ok = n >= at + 21 && b[at] == 3;
+        CHECK(ok, "scroll event");
+        at += 21;
+        ok = n >= at + 7 && b[at] == 12 && b[at + 2] == 3 && b[at + 3] == 0x04 && b[at + 4] == 0x5e && b[at + 7] == 23;
+        CHECK(ok, "game controller created (Xbox 360 pad)");
+        at += 8 + 23;
+        ok = n >= at + 2 && b[at] == 0 && b[at + 1] == 80;  // descriptor size
+        at += 2 + 80;
+        ok = ok && n >= at + 20 && b[at] == 13 && b[at + 4] == 15 && b[at + 5 + 12] == 0x01;
+        CHECK(ok, "controller input: A pressed");
+        at += 20;
+        CHECK(n >= at + 3 && b[at] == 14, "controller removed (%zu bytes received)", n);
+
+        // clipboard, both ways
+        CHECK(adb.lastShell.find("clipboard_autosync=true") != std::string::npos, "server started with clipboard sync");
+        adb.phoneClipboard("copied on the phone\nline 2 \xe2\x9c\x93");
+        CHECK(waitFor([&] { return L.phoneClips == 1; }, 2000), "phone's copy received");
+        {
+            std::lock_guard<std::mutex> lk(L.m);
+            CHECK(L.phoneClip == "copied on the phone\nline 2 \xe2\x9c\x93", "phone's copy text intact");
+        }
+        ctl->setClipboard("from the PC", true);
+        got.clear();
+        waitFor([&] { got += adb.takeControlBytes(); return got.size() >= 14 + 11; }, 2000);
+        b = (const uint8_t*)got.data();
+        ok = got.size() == 25 && b[0] == 9 && b[9] == 1 && b[13] == 11 && got.compare(14, 11, "from the PC") == 0;
+        CHECK(ok, "PC clipboard sent to the phone and pasted");
+        adb.phoneClipboard("");  // phone cleared its clipboard: still a valid message
+        adb.phoneClipboard("second");
+        CHECK(waitFor([&] { return L.phoneClips == 3; }, 2000) && ctl->alive(), "further copies received, channel still up");
+    }
 
     printf("== user closes the mirror\n");
     am.disconnect();

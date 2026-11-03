@@ -225,6 +225,58 @@ public:
         a.addHit(H_FIREWALL_LINK, D2D1::RectF(lr.left - 6, lr.top - 4, lr.right + 6, lr.bottom + 4));
     }
 
+    // ---------------------------------------------------------------- key zones
+    void drawKeyZone(App& a, D2D1_POINT_2F c, const std::wstring& label, int state, float al) override {
+        const Pal& p = DARK;
+        IDWriteTextFormat* f = a.fmt(state == 2 ? 12 : 13, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
+        float tw = a.textWidth(label, f);
+        float h = 38, w = std::max(h, tw + 22);
+        D2D1_RECT_F r = D2D1::RectF(c.x - w / 2, c.y - h / 2, c.x + w / 2, c.y + h / 2);
+        uint32_t fill = state == 3 ? 0xFFFFFF : state == 2 ? 0xFFFFFF : state == 1 ? 0x0A84FF : 0x1C1C1E;
+        float fa = state == 0 ? 0.55f : state == 3 ? 0.9f : 0.92f;
+        a.softShadow(r, h / 2, 0.35f * al, 8, 2);
+        roundFill(a, r, h / 2, fill, fa * al);
+        if (state == 2) {  // waiting for a key: pulsing ring
+            float ph = (float)fmod(a.animTime() * 1.4, 1.0);
+            float g = 3 + ph * 7;
+            a.strokeRect(D2D1::RectF(r.left - g, r.top - g, r.right + g, r.bottom + g), 0x0A84FF, (1 - ph) * al, h / 2 + g, 2.0f);
+        }
+        hairlineBorder(a, r, h / 2, 0xFFFFFF, (state == 0 ? 0.35f : 0.5f) * al);
+        uint32_t tc = state == 2 || state == 3 ? 0x1C1C1E : 0xFFFFFF;
+        a.text(label, r, f, tc, al);
+        (void)p;
+    }
+
+    void drawKeymapBar(App& a, float W, float H, D2D1_RECT_F video) override {
+        (void)H;
+        IDWriteTextFormat* hf = a.fmt(13);
+        IDWriteTextFormat* bf = a.fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
+        std::wstring hint = a.zones_.empty() ? L"Click the screen where a key should tap" : L"Click to add  ·  Drag to move  ·  Right-click to remove";
+        std::wstring onl = a.keymapOn_ ? L"Keys on" : L"Keys off";
+        float hw = a.textWidth(hint, hf), ow = a.textWidth(onl, bf) + 24, cw = a.textWidth(L"Clear", bf) + 24,
+              dw = a.textWidth(L"Done", bf) + 30;
+        float bw = std::min(W - 24, 16 + 20 + 8 + hw + 16 + ow + 6 + cw + 6 + dw + 8);
+        D2D1_RECT_F bar = D2D1::RectF(W / 2 - bw / 2, 14, W / 2 + bw / 2, 14 + 44);
+        frosted(a, bar, 22, video, 1.0f);
+        a.addHit(H_KEYMAP_BAR, bar);
+        float x = bar.left + 16;
+        a.icon(G_KEYBOARD, x + 10, 36, 15, 0xFFFFFF);
+        x += 28;
+        a.text(hint, D2D1::RectF(x, bar.top, x + hw + 2, bar.bottom), hf, 0xFFFFFF, 0.85f);
+        float bx = bar.right - 8;
+        auto pill = [&](int id, const std::wstring& t, float w, bool primary) {
+            D2D1_RECT_F r = D2D1::RectF(bx - w, bar.top + 7, bx, bar.bottom - 7);
+            bool hov = a.hover_ == id;
+            roundFill(a, r, 15, primary ? (hov ? 0x409CFF : 0x0A84FF) : 0xFFFFFF, primary ? 1.0f : (hov ? 0.22f : 0.12f));
+            a.text(t, r, bf, 0xFFFFFF);
+            a.addHit(id, r);
+            bx -= w + 6;
+        };
+        pill(H_KEYMAP_DONE, L"Done", dw, true);
+        pill(H_KEYMAP_CLEAR, L"Clear", cw, false);
+        pill(H_KEYMAP_TOGGLE, onl, ow, false);
+    }
+
     // ---------------------------------------------------------------- updates
     void drawUpdateBadge(App& a, float W, float H) override {
         const Pal& p = pal(a);
@@ -521,8 +573,10 @@ public:
         a.text(info, D2D1::RectF(x, top.top, top.right - 12, top.bottom), inf, 0xFFFFFF, 0.7f * al);
 
         // bottom: controls
+        bool ctl = a.controlling();
         float bd = 40, gap = 4, padd = 6;
-        float bw = padd * 2 + bd * 4 + gap * 3 + 9;
+        int nb = ctl ? 5 : 4;
+        float bw = padd * 2 + bd * nb + gap * (nb - 1) + 9;
         D2D1_RECT_F bar = D2D1::RectF(W / 2 - bw / 2, H - 24 - (bd + padd * 2), W / 2 + bw / 2, H - 24);
         frosted(a, bar, (bd + padd * 2) / 2, video, al);
         float bcy = (bar.top + bar.bottom) / 2;
@@ -531,6 +585,10 @@ public:
         bx += bd + gap;
         circleButton(a, H_FULLSCREEN, a.fullscreen_ ? G_WINDOW : G_FULL, bx, bcy, bd, 0xFFFFFF, 0xFFFFFF, 0.16f, al);
         bx += bd + gap;
+        if (ctl) {  // key zones for games
+            circleButton(a, H_KEYMAP, G_KEYBOARD, bx, bcy, bd, 0xFFFFFF, 0xFFFFFF, 0.16f, al);
+            bx += bd + gap;
+        }
         circleButton(a, H_SETTINGS, G_SETTINGS, bx, bcy, bd, 0xFFFFFF, 0xFFFFFF, 0.16f, al);
         bx += bd / 2 + 4;
         a.line(bx + 0.5f, bcy - 12, bx + 0.5f, bcy + 12, 0xFFFFFF, 0.2f * al, 1.0f);
