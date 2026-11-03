@@ -371,6 +371,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         if (w == VK_F11 || (w == VK_RETURN && (GetKeyState(VK_MENU) & 0x8000))) setFullscreen(!fullscreen_);
         else if (w == VK_ESCAPE) {
             if (fullscreen_) setFullscreen(false);
+            else if (pairingOpen_) closePairing();
             else if (settingsOpen_) click(H_BACK);
         } else if (w == 'M') {
             click(H_VOL_ICON);
@@ -487,7 +488,7 @@ void App::click(int hit) {
         setFullscreen(!fullscreen_);
         break;
     case H_DISCONNECT:
-        if (clientIsUsb()) android_.disconnect();
+        if (clientIsAndroid()) android_.disconnect();
         else rx_.disconnectClient();
         break;
     case H_ANDROID:
@@ -496,6 +497,19 @@ void App::click(int hit) {
         break;
     case H_USB_ACTION:
         android_.mirrorAgain();
+        break;
+    case H_ANDROID_WIFI:
+        settings_.wifiAndroid = !settings_.wifiAndroid;
+        applySettings(false);
+        break;
+    case H_PAIR:
+        openPairing();
+        break;
+    case H_PAIR_CLOSE:
+        closePairing();
+        break;
+    case H_PAIR_RETRY:
+        android_.startPairing();
         break;
     case H_FIREWALL:
     case H_FIREWALL_LINK:
@@ -574,6 +588,23 @@ void App::setFullscreen(bool fs) {
     fullscreen_ = fs;
     lastMouseMove_ = mn::now_ms();
     InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::openPairing() {
+    if (!settings_.wifiAndroid) {
+        settings_.wifiAndroid = true;
+        applySettings(false);
+    }
+    commitName();
+    settingsOpen_ = false;
+    pairingOpen_ = true;
+    pair_ = mn::PairingStatus();
+    android_.startPairing();
+}
+
+void App::closePairing() {
+    pairingOpen_ = false;
+    android_.cancelPairing();
 }
 
 void App::showToast(const std::wstring& msg) {
@@ -695,13 +726,25 @@ void App::handleEvent(Event* e) {
         usbStatus_.state = (mn::AndroidState)e->i;
         usbStatus_.device = e->s1;
         usbStatus_.detail = e->s2;
+        usbStatus_.wireless = e->b;
         mn::logf(mn::LogLevel::Debug, "android: status %d", e->i);
-        if (usbStatus_.state == mn::AndroidState::Unauthorized && prev != usbStatus_.state)
+        if (usbStatus_.state == mn::AndroidState::Unauthorized && prev != usbStatus_.state && !usbStatus_.wireless)
             showToast(L"Tap “Allow” on your phone to mirror it over USB");
         else if (usbStatus_.state == mn::AndroidState::Failed && prev != usbStatus_.state)
-            showToast(L"Couldn't mirror " + (e->s1.empty() ? std::wstring(L"the phone") : from_utf8(e->s1)) + L" over USB");
+            showToast(L"Couldn't mirror " + (e->s1.empty() ? std::wstring(L"the phone") : from_utf8(e->s1)) +
+                      (usbStatus_.wireless ? L" over Wi-Fi" : L" over USB"));
         break;
     }
+    case EV_PAIRING:
+        pair_.phase = (mn::PairingStatus::Phase)e->i;
+        if (!e->s1.empty() || pair_.phase != mn::PairingStatus::Waiting) pair_.qr = e->s1;
+        pair_.device = e->s2;
+        pair_.detail = e->s3;
+        if (pair_.phase == mn::PairingStatus::Done && pairingOpen_) {
+            pairingOpen_ = false;
+            showToast(L"Paired with " + (e->s2.empty() ? std::wstring(L"your phone") : from_utf8(e->s2)) + L". Starting mirroring…");
+        }
+        break;
     case EV_FIREWALL_DONE:
         showToast(e->b ? L"Windows Firewall now allows Mirrorly" : L"Firewall rules could not be changed");
         break;

@@ -67,6 +67,7 @@ void Settings::load() {
     autoFullscreen = readInt(L"AutoFullscreen", 0) != 0;
     theme = readStr(L"Theme", L"default");
     usbAndroid = readInt(L"AndroidUSB", 1) != 0;
+    wifiAndroid = readInt(L"AndroidWiFi", 1) != 0;
     volume = std::max(0, std::min(100, readInt(L"Volume", 100)));
 
     bool dirty = false;
@@ -108,6 +109,7 @@ void Settings::save() const {
     writeStr(L"AutoFullscreen", autoFullscreen ? L"1" : L"0");
     writeStr(L"Theme", theme);
     writeStr(L"AndroidUSB", usbAndroid ? L"1" : L"0");
+    writeStr(L"AndroidWiFi", wifiAndroid ? L"1" : L"0");
     writeStr(L"Volume", std::to_wstring(volume));
     writeStr(L"Key", from_utf8(mn::hex_encode(seed, 32)));
     writeStr(L"DeviceId", from_utf8(mn::hex_encode(deviceId, 6)));

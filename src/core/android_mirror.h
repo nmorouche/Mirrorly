@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "adb.h"
+#include "mdns.h"
 #include "receiver.h"
 
 namespace mn {
@@ -27,11 +28,13 @@ constexpr const char* kScrcpyServerVersion = "5.0.1";
 constexpr int kAudioPcm48k = 0x100;
 
 struct AndroidConfig {
-    bool enabled = true;
+    bool enabled = true;   // the whole Android engine (adb)
+    bool usb = true;       // mirror phones plugged in with a cable
     int maxSize = 1920;   // longest edge in pixels (0 = phone's native size)
     int maxFps = 60;
     bool audio = true;
     int videoBitRate = 12000000;
+    bool wireless = true;  // connect to paired phones over Wi-Fi (Wireless debugging, Android 11+)
 };
 
 enum class AndroidState {
@@ -50,12 +53,23 @@ struct AndroidStatus {
     AndroidState state = AndroidState::Off;
     std::string device;  // phone name, when known
     std::string detail;  // error text for Failed / NoAdb
+    bool wireless = false;  // the phone is connected over Wi-Fi, not USB
+};
+
+// Pairing a phone over Wi-Fi: the phone scans a QR code (Developer options > Wireless
+// debugging > Pair device with QR code), then advertises a pairing service over mDNS.
+struct PairingStatus {
+    enum Phase { Idle, Waiting, Pairing, Connecting, Done, Failed } phase = Idle;
+    std::string qr;      // text to show as a QR code while Waiting
+    std::string device;  // phone name once known
+    std::string detail;  // error text for Failed
 };
 
 class AndroidStatusListener {
 public:
     virtual ~AndroidStatusListener() {}
     virtual void onAndroidStatus(const AndroidStatus&) = 0;
+    virtual void onPairingStatus(const PairingStatus&) {}
 };
 
 class AndroidMirror {
@@ -78,6 +92,10 @@ public:
     // The user wants to mirror the plugged-in phone again.
     void mirrorAgain();
     bool active() const { return sessionActive_; }
+    // Wi-Fi pairing with a QR code; the status comes back through onPairingStatus.
+    void startPairing();
+    void cancelPairing();
+    static bool isWireless(const std::string& serial);
     AndroidStatus status();
 
 private:
@@ -89,6 +107,8 @@ private:
     void sessionMain(std::string serial, std::string model);
     bool runSession(const std::string& serial, std::string& name, std::string& error);
     void audioLoop(sock_t s);
+    void wirelessTick();
+    void setPairing(PairingStatus::Phase phase, const std::string& device, const std::string& detail);
 
     Receiver& rx_;
     AdbClient adb_;
@@ -106,6 +126,16 @@ private:
     std::string adbError_;
     AndroidStatus last_;
     bool haveLast_ = false;
+
+    // Wi-Fi
+    MdnsBrowser browser_;
+    PairingStatus pair_;
+    std::string pairName_, pairCode_;
+    uint64_t pairStarted_ = 0;
+    uint32_t pairedIp_ = 0;
+    uint64_t autoStartUntil_ = 0;  // wireless phones that appear before this start mirroring
+    std::map<std::string, uint64_t> connectTried_;
+    uint64_t lastWirelessTick_ = 0;
 
     volatile bool running_ = false;
     std::thread watchThread_;

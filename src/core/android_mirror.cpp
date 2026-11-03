@@ -66,6 +66,7 @@ void AndroidMirror::stop() {
     if (!running_ && !watchThread_.joinable()) return;
     running_ = false;
     if (watchThread_.joinable()) watchThread_.join();
+    browser_.stop();
     stopSession(false);
     if (sessionThread_.joinable()) sessionThread_.join();
     sessionDone_ = false;
@@ -75,10 +76,12 @@ void AndroidMirror::updateConfig(const AndroidConfig& cfg) {
     bool disable;
     {
         std::lock_guard<std::mutex> lk(m_);
-        disable = cfg_.enabled && !cfg.enabled;
+        bool wifi = isWireless(sessSerial_);
+        disable = (cfg_.enabled && !cfg.enabled) || (!sessSerial_.empty() && (wifi ? !cfg.wireless : !cfg.usb));
         cfg_ = cfg;
     }
-    if (disable) stopSession(false);
+    if (disable && sessionActive_) stopSession(false);
+    publishStatus();
 }
 
 void AndroidMirror::disconnect() {
@@ -107,6 +110,7 @@ void AndroidMirror::watchLoop() {
             enabled = cfg_.enabled;
         }
         if (!enabled) {
+            if (browser_.running()) browser_.stop();
             evaluate();
             sleep_ms(300);
             continue;
@@ -148,6 +152,7 @@ void AndroidMirror::watchLoop() {
             }
             int w = sock_wait_readable(s, 250);
             if (w < 0) break;
+            bool pairDone = false;
             if (w > 0) {
                 std::vector<AdbDevice> list;
                 if (!AdbClient::readDeviceList(s, list, &running_)) break;
@@ -158,6 +163,22 @@ void AndroidMirror::watchLoop() {
                         if (o.serial == d.serial && o.state == d.state) known = true;
                     if (!known) LOGI("android: %s is %s%s%s", d.serial.c_str(), d.state.c_str(), d.model.empty() ? "" : ", ",
                                      d.model.c_str());
+                }
+                // phones that join over Wi-Fi wait for the user ("Mirror"), except right after pairing
+                uint64_t nowMs = now_ms();
+                for (auto& d : list) {
+                    if (!isWireless(d.serial) || d.state != "device") continue;
+                    bool known = false;
+                    for (auto& o : devices_)
+                        if (o.serial == d.serial && o.state == "device") known = true;
+                    if (known) continue;
+                    if (nowMs >= autoStartUntil_) dismissed_.insert(d.serial);
+                    else autoStartUntil_ = 0;  // the phone we just paired: mirror it now, once
+                    if (pair_.phase == PairingStatus::Connecting) {
+                        pair_.phase = PairingStatus::Done;
+                        pair_.device = d.model;
+                        pairDone = true;
+                    }
                 }
                 // forget dismissals / failures of phones that were unplugged
                 for (auto it = dismissed_.begin(); it != dismissed_.end();) {
@@ -172,6 +193,8 @@ void AndroidMirror::watchLoop() {
                 }
                 devices_ = list;
             }
+            if (pairDone) setPairing(PairingStatus::Done, "", "");
+            wirelessTick();
             evaluate();
         }
         sock_close(s);
@@ -190,13 +213,17 @@ void AndroidMirror::evaluate() {
         std::lock_guard<std::mutex> lk(m_);
         if (cfg_.enabled && !sessionActive_ && !sessionThread_.joinable()) {
             uint64_t now = now_ms();
-            for (auto& d : devices_) {
-                if (d.state != "device" || dismissed_.count(d.serial)) continue;
-                auto f = failures_.find(d.serial);
-                if (f != failures_.end() && (f->second.count >= 3 || now < f->second.retryAt)) continue;
-                target = d;
-                want = true;
-                break;
+            for (int pass = 0; pass < 2 && !want; pass++) {  // USB first, then Wi-Fi
+                for (auto& d : devices_) {
+                    if (isWireless(d.serial) != (pass == 1)) continue;
+                    if (pass == 0 ? !cfg_.usb : !cfg_.wireless) continue;
+                    if (d.state != "device" || dismissed_.count(d.serial)) continue;
+                    auto f = failures_.find(d.serial);
+                    if (f != failures_.end() && (f->second.count >= 3 || now < f->second.retryAt)) continue;
+                    target = d;
+                    want = true;
+                    break;
+                }
             }
         }
     }
@@ -214,6 +241,7 @@ void AndroidMirror::publishStatus() {
             if (!sessRunning_) return;  // winding down: the final state follows
             st.state = mirroring_ ? AndroidState::Mirroring : AndroidState::Connecting;
             st.device = sessName_.empty() ? sessModel_ : sessName_;
+            st.wireless = isWireless(sessSerial_);
         } else if (!adbOk_) {
             st.state = AndroidState::NoAdb;
             st.detail = adbError_;
@@ -226,9 +254,12 @@ void AndroidMirror::publishStatus() {
                 st.state = s;
                 st.device = d.model;
                 st.detail = detail;
+                st.wireless = isWireless(d.serial);
             };
             for (auto& d : devices_) {
                 auto f = failures_.find(d.serial);
+                if (isWireless(d.serial) && d.state != "device") continue;  // a phone that left the Wi-Fi
+                if (isWireless(d.serial) ? !cfg_.wireless : !cfg_.usb) continue;
                 if (d.state == "unauthorized") take(5, AndroidState::Unauthorized, d, "");
                 else if (d.state == "device" && f != failures_.end() && f->second.count >= 3)
                     take(4, AndroidState::Failed, d, f->second.error);
@@ -237,7 +268,9 @@ void AndroidMirror::publishStatus() {
                 else take(1, AndroidState::Offline, d, "");
             }
         }
-        if (haveLast_ && st.state == last_.state && st.device == last_.device && st.detail == last_.detail) return;
+        if (haveLast_ && st.state == last_.state && st.device == last_.device && st.detail == last_.detail &&
+            st.wireless == last_.wireless)
+            return;
         last_ = st;
         haveLast_ = true;
     }
@@ -317,6 +350,7 @@ bool AndroidMirror::runSession(const std::string& serial, std::string& name, std
         std::lock_guard<std::mutex> lk(m_);
         cfg = cfg_;
     }
+    const bool wireless = isWireless(serial);
     if (jar_.empty()) {
         error = "the phone server is missing from this build";
         return false;
@@ -340,7 +374,8 @@ bool AndroidMirror::runSession(const std::string& serial, std::string& name, std
     snprintf(cmd, sizeof(cmd),
              "CLASSPATH=%s app_process / com.genymobile.scrcpy.Server %s scid=%08x log_level=info tunnel_forward=true "
              "control=false video_codec=h264 video_bit_rate=%d max_size=%d max_fps=%d %s",
-             kRemoteJar, kScrcpyServerVersion, scid, cfg.videoBitRate, cfg.maxSize, cfg.maxFps,
+             kRemoteJar, kScrcpyServerVersion, scid, wireless ? std::min(cfg.videoBitRate, 8000000) : cfg.videoBitRate,
+             cfg.maxSize, cfg.maxFps,
              cfg.audio ? "audio_codec=raw" : "audio=false");
     sock_t sh = adb_.shell(serial, cmd);
     if (sh == MN_INVALID_SOCKET) {
@@ -450,7 +485,7 @@ bool AndroidMirror::runSession(const std::string& serial, std::string& name, std
     ClientInfo ci;
     ci.name = name.empty() ? "Android phone" : name;
     ci.model = "Android";
-    ci.ip = "USB";
+    ci.ip = wireless ? "Wi-Fi" : "USB";
     ci.deviceId = serial;
     if (l) {
         l->onClientConnecting(ci);
@@ -539,6 +574,131 @@ void AndroidMirror::audioLoop(sock_t s) {
         if (l && len >= 4) l->onAudioPcm((const int16_t*)pkt.data(), (int)(len / 4));
     }
     if (l) l->onAudioStop();
+}
+
+// ---------------------------------------------------------------- Wi-Fi
+
+// "192.168.1.20:41235" (adb connect) or "adb-SERIAL-xyz._adb-tls-connect._tcp" (adb's own mDNS)
+bool AndroidMirror::isWireless(const std::string& serial) {
+    return serial.find(':') != std::string::npos || serial.find("._adb-tls-connect.") != std::string::npos;
+}
+
+void AndroidMirror::setPairing(PairingStatus::Phase phase, const std::string& device, const std::string& detail) {
+    PairingStatus copy;
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        pair_.phase = phase;
+        if (!device.empty()) pair_.device = device;
+        pair_.detail = detail;
+        if (phase != PairingStatus::Waiting) pair_.qr.clear();
+        copy = pair_;
+    }
+    if (statusListener_) statusListener_->onPairingStatus(copy);
+}
+
+void AndroidMirror::startPairing() {
+    static const char* abc = "abcdefghijkmnpqrstuvwxyz23456789";
+    std::random_device rd;
+    std::string name = "mirrorly-", code;
+    for (int i = 0; i < 6; i++) name += abc[rd() % 32];
+    for (int i = 0; i < 10; i++) code += (char)('0' + rd() % 10);
+    PairingStatus copy;
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        pairName_ = name;
+        pairCode_ = code;
+        pairStarted_ = now_ms();
+        pair_ = PairingStatus();
+        pair_.phase = PairingStatus::Waiting;
+        // the format Android's "Pair device with QR code" scanner understands
+        pair_.qr = "WIFI:T:ADB;S:" + name + ";P:" + code + ";;";
+        copy = pair_;
+    }
+    LOGI("android: waiting for a phone to scan the pairing code (%s)", name.c_str());
+    browser_.queryNow();
+    if (statusListener_) statusListener_->onPairingStatus(copy);
+}
+
+void AndroidMirror::cancelPairing() {
+    std::lock_guard<std::mutex> lk(m_);
+    if (pair_.phase != PairingStatus::Idle) LOGI("android: pairing closed");
+    pair_ = PairingStatus();
+}
+
+void AndroidMirror::wirelessTick() {
+    uint64_t now = now_ms();
+    if (now - lastWirelessTick_ < 700) return;
+    lastWirelessTick_ = now;
+    bool wireless;
+    PairingStatus::Phase phase;
+    std::string name, code;
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        wireless = cfg_.wireless;
+        phase = pair_.phase;
+        name = pairName_;
+        code = pairCode_;
+    }
+    bool pairingNow = phase == PairingStatus::Waiting || phase == PairingStatus::Connecting;
+    if (!wireless && !pairingNow) {
+        if (browser_.running()) browser_.stop();
+        return;
+    }
+    if (!browser_.running() && !browser_.start({"_adb-tls-pairing._tcp", "_adb-tls-connect._tcp"})) return;
+
+    // 1. pairing: the phone that scanned our code advertises "<name>._adb-tls-pairing._tcp"
+    if (phase == PairingStatus::Waiting) {
+        if (now - pairStarted_ > 5 * 60 * 1000) {
+            setPairing(PairingStatus::Failed, "", "No phone scanned the code");
+            return;
+        }
+        for (auto& f : browser_.find("_adb-tls-pairing._tcp", 60000)) {
+            if (f.instance != name) continue;
+            std::string hp = ip_to_string(f.ip) + ":" + std::to_string(f.port);
+            LOGI("android: pairing with the phone at %s", hp.c_str());
+            setPairing(PairingStatus::Pairing, "", "");
+            std::string reply;
+            if (adb_.pair(hp, code, reply)) {
+                LOGI("android: %s", reply.c_str());
+                {
+                    std::lock_guard<std::mutex> lk(m_);
+                    pairedIp_ = f.ip;
+                    autoStartUntil_ = now_ms() + 60000;
+                    connectTried_.clear();
+                }
+                setPairing(PairingStatus::Connecting, "", "");
+                browser_.queryNow();
+            } else {
+                LOGW("android: pairing failed: %s", reply.c_str());
+                setPairing(PairingStatus::Failed, "", reply.empty() ? "Pairing failed" : reply);
+            }
+            return;
+        }
+    }
+    if (phase == PairingStatus::Connecting && now > autoStartUntil_) {
+        setPairing(PairingStatus::Failed, "", "Paired, but the phone didn't connect. Is it on the same Wi-Fi as this PC?");
+        return;
+    }
+
+    // 2. connect to phones with Wireless debugging on (only paired ones accept)
+    for (auto& f : browser_.find("_adb-tls-connect._tcp", 60000)) {
+        std::string hp = ip_to_string(f.ip) + ":" + std::to_string(f.port);
+        bool justPaired;
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            bool present = false;
+            for (auto& d : devices_)
+                if (d.serial == hp || d.serial.compare(0, f.instance.size(), f.instance) == 0) present = true;
+            if (present) continue;
+            justPaired = f.ip == pairedIp_ && now < autoStartUntil_;
+            uint64_t& t = connectTried_[hp];
+            if (t && now - t < (justPaired ? 2000u : 10000u)) continue;
+            t = now;
+        }
+        std::string reply;
+        bool ok = adb_.connect(hp, reply);
+        if (ok || justPaired) LOGI("android: adb connect %s: %s", hp.c_str(), reply.c_str());
+    }
 }
 
 }  // namespace mn

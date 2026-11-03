@@ -3,6 +3,10 @@
 // Each theme's look lives in theme_*.cpp.
 #include "app.h"
 
+extern "C" {
+#include "qrcodegen.h"
+}
+
 #include <d2d1effects.h>
 
 #define _USE_MATH_DEFINES
@@ -492,12 +496,14 @@ std::wstring App::primaryIp() const {
     return L"";
 }
 
-std::wstring App::wiredHint(std::wstring& action, bool& attention) const {
+std::wstring App::wiredHint(std::wstring& action, bool& attention, int& actionHit) const {
     using mn::AndroidState;
     action.clear();
     attention = false;
+    actionHit = H_USB_ACTION;
     std::wstring dev = from_utf8(usbStatus_.device);
     if (dev.empty()) dev = L"your phone";
+    const wchar_t* over = usbStatus_.wireless ? L" over Wi-Fi" : L" over USB";
     switch (usbStatus_.state) {
     case AndroidState::Unauthorized:
         attention = true;
@@ -505,23 +511,28 @@ std::wstring App::wiredHint(std::wstring& action, bool& attention) const {
     case AndroidState::Offline:
         return L"Your phone is getting ready over USB…";
     case AndroidState::Connecting:
-        return L"Connecting to " + dev + L" over USB…";
+        return L"Connecting to " + dev + over + L"…";
     case AndroidState::Ready:
         action = L"Mirror";
-        return dev + L" is plugged in";
+        return dev + (usbStatus_.wireless ? L" is available over Wi-Fi" : L" is plugged in");
     case AndroidState::Failed:
         attention = true;
         action = L"Try again";
-        return L"Couldn't mirror " + dev + L" over USB";
+        return L"Couldn't mirror " + dev + over;
     case AndroidState::NoAdb:
         if (iphoneUsb_) break;
         attention = true;
-        return L"Mirroring Android phones over USB isn't available";
+        return L"Mirroring Android phones isn't available";
     default:
         break;
     }
     if (iphoneUsb_) return L"iPhone connected by cable: use Screen Mirroring";
     if (usbStatus_.state == AndroidState::Off) return L"Or plug in your iPhone with Personal Hotspot on";
+    if (settings_.wifiAndroid) {
+        action = L"Pair over Wi-Fi";
+        actionHit = H_PAIR;
+        return settings_.usbAndroid ? L"Android phone? Plug it in with USB debugging on, or" : L"Android phone?";
+    }
     return L"Or plug in a phone: Android with USB debugging, iPhone with Personal Hotspot";
 }
 
@@ -529,8 +540,9 @@ std::wstring App::androidSettingsText() const {
     using mn::AndroidState;
     std::wstring dev = from_utf8(usbStatus_.device);
     if (dev.empty()) dev = L"The phone";
+    if (!settings_.usbAndroid) return L"Mirror an Android phone plugged in with a cable";
+    if (usbStatus_.wireless && usbStatus_.state != AndroidState::NoAdb) return L"Turn on USB debugging on the phone, then plug it in";
     switch (usbStatus_.state) {
-    case AndroidState::Off: return L"Mirror an Android phone plugged in with a cable";
     case AndroidState::NoAdb: return L"Not available: " + from_utf8(usbStatus_.detail);
     case AndroidState::Unauthorized: return L"Tap “Allow” on the phone";
     case AndroidState::Ready:
@@ -540,6 +552,47 @@ std::wstring App::androidSettingsText() const {
     case AndroidState::Failed: return L"Couldn't start: " + from_utf8(usbStatus_.detail);
     default: return L"Turn on USB debugging on the phone, then plug it in";
     }
+}
+
+std::wstring App::pairingText(bool& busy, bool& error) const {
+    using P = mn::PairingStatus;
+    busy = error = false;
+    if (usbStatus_.state == mn::AndroidState::NoAdb) {
+        error = true;
+        return L"Android mirroring isn't available: " + from_utf8(usbStatus_.detail);
+    }
+    switch (pair_.phase) {
+    case P::Waiting: busy = true; return L"Waiting for your phone to scan the code…";
+    case P::Pairing: busy = true; return L"Pairing with your phone…";
+    case P::Connecting: busy = true; return L"Paired. Connecting…";
+    case P::Done: return L"Paired with " + (pair_.device.empty() ? std::wstring(L"your phone") : from_utf8(pair_.device));
+    case P::Failed: error = true; return from_utf8(pair_.detail.empty() ? "Pairing failed" : pair_.detail);
+    default: busy = true; return L"Getting ready…";
+    }
+}
+
+void App::drawQr(const std::string& text, D2D1_RECT_F r, uint32_t fg, uint32_t bg) {
+    static std::string lastText;
+    static std::vector<uint8_t> qr(qrcodegen_BUFFER_LEN_MAX);
+    static bool ok = false;
+    if (text != lastText) {
+        std::vector<uint8_t> tmp(qrcodegen_BUFFER_LEN_MAX);
+        ok = qrcodegen_encodeText(text.c_str(), tmp.data(), qr.data(), qrcodegen_Ecc_MEDIUM, qrcodegen_VERSION_MIN,
+                                  qrcodegen_VERSION_MAX, qrcodegen_Mask_AUTO, true);
+        lastText = text;
+    }
+    fillRect(r, bg);
+    if (!ok || text.empty()) return;
+    int n = qrcodegen_getSize(qr.data());
+    float side = std::min(r.right - r.left, r.bottom - r.top);
+    float m = std::floor(side / (n + 4));  // whole pixels per module, 2-module quiet zone
+    if (m < 1) m = side / (n + 4);
+    float ox = std::floor((r.left + r.right - m * n) / 2), oy = std::floor((r.top + r.bottom - m * n) / 2);
+    brush_->SetColor(rgb(fg));
+    for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++)
+            if (qrcodegen_getModule(qr.data(), x, y))
+                rt_->FillRectangle(D2D1::RectF(ox + x * m, oy + y * m, ox + (x + 1) * m, oy + (y + 1) * m), brush_);
 }
 
 std::wstring App::videoInfo() const {
@@ -635,16 +688,32 @@ void App::drawSettings(float W, float H) {
     t.button(*this, H_FIREWALL, L"Allow", G_SHIELD, lx1, cy);
     y = g.bottom + gap;
 
-    // ---- Cable
-    y = t.sectionTitle(*this, x0, x1, y, L"Cable (USB)");
-    g = D2D1::RectF(x0, y, x1, y + rowH * 2);
-    t.group(*this, g, 2, rowH);
+    // ---- Android
+    y = t.sectionTitle(*this, x0, x1, y, L"Android");
+    g = D2D1::RectF(x0, y, x1, y + rowH * 3);
+    t.group(*this, g, 3, rowH);
     cy = g.top + rowH / 2;
     std::wstring androidDesc = androidSettingsText();
-    t.rowText(*this, lx0, lx1 - 70, cy, L"Android phones", androidDesc.c_str());
+    t.rowText(*this, lx0, lx1 - 70, cy, L"USB cable", androidDesc.c_str());
     t.toggle(*this, H_ANDROID, settings_.usbAndroid, lx1, cy);
     cy += rowH;
-    t.rowText(*this, lx0, lx1, cy, L"iPhone",
+    std::wstring wifiDesc = L"Phones paired over Wi-Fi show up when Wireless debugging is on";
+    if (settings_.wifiAndroid && usbStatus_.wireless &&
+        (usbStatus_.state == mn::AndroidState::Ready || usbStatus_.state == mn::AndroidState::Mirroring))
+        wifiDesc = from_utf8(usbStatus_.device) + (usbStatus_.state == mn::AndroidState::Mirroring ? L" is mirroring" : L" is available");
+    t.rowText(*this, lx0, lx1 - 70, cy, L"Wi-Fi", wifiDesc.c_str());
+    t.toggle(*this, H_ANDROID_WIFI, settings_.wifiAndroid, lx1, cy);
+    cy += rowH;
+    t.rowText(*this, lx0, lx1 - 140, cy, L"Pair a phone over Wi-Fi", L"Android 11 or later, on the same Wi-Fi as this PC");
+    t.button(*this, H_PAIR, L"Pair", G_WIFI, lx1, cy);
+    y = g.bottom + gap;
+
+    // ---- iPhone
+    y = t.sectionTitle(*this, x0, x1, y, L"iPhone");
+    g = D2D1::RectF(x0, y, x1, y + rowH);
+    t.group(*this, g, 1, rowH);
+    cy = g.top + rowH / 2;
+    t.rowText(*this, lx0, lx1, cy, L"USB cable",
               iphoneUsb_ ? L"Connected by cable: use Screen Mirroring on the iPhone"
                          : L"Turn on Personal Hotspot on the iPhone, then plug it in");
     y = g.bottom + gap;
@@ -717,7 +786,10 @@ void App::render() {
     rt_->BeginDraw();
     rt_->SetTransform(D2D1::Matrix3x2F::Identity());
     rt_->Clear(rgb(theme_->windowColor(*this)));
-    if (settingsOpen_) {
+    if (pairingOpen_ && !mirrorActive_) {
+        layoutEdit(false, D2D1::RectF());
+        theme_->drawPairing(*this, W, H);
+    } else if (settingsOpen_) {
         drawSettings(W, H);
     } else {
         layoutEdit(false, D2D1::RectF());

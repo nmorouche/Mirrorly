@@ -20,6 +20,7 @@ int main(int argc, char** argv) {
     adb.loopVideo = true;
     adb.model = "Pixel_8";
     adb.deviceName = "Pixel 8";
+    adb.pairCode = "*";  // Wi-Fi pairing: accept any code
     uint16_t port = argc > 2 ? (uint16_t)atoi(argv[2]) : 5037;
     if (!adb.start(port)) {
         printf("cannot listen on %u\n", port);

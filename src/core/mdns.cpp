@@ -390,4 +390,194 @@ void MdnsResponder::threadMain() {
     }
 }
 
+// ============================================================== browser
+
+static std::string joinName(const Name& n, size_t from = 0) {
+    std::string r;
+    for (size_t i = from; i < n.size(); i++) {
+        if (!r.empty()) r += '.';
+        r += n[i];
+    }
+    return r;
+}
+
+bool MdnsBrowser::start(const std::vector<std::string>& types) {
+    if (running_) return true;
+    net_init();
+    types_ = types;
+    sock_ = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock_ == MN_INVALID_SOCKET) return false;
+    sock_set_reuse(sock_);
+    udp_disable_connreset(sock_);
+#ifdef SO_REUSEPORT
+    int one = 1;
+    setsockopt(sock_, SOL_SOCKET, SO_REUSEPORT, (const char*)&one, sizeof(one));
+#endif
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_ANY);
+    a.sin_port = htons(5353);
+    if (bind(sock_, (sockaddr*)&a, sizeof(a)) != 0) {
+        LOGW("mDNS browser: bind 5353 failed (%d)", sock_last_error());
+        sock_close(sock_);
+        sock_ = MN_INVALID_SOCKET;
+        return false;
+    }
+    int ttl = 255, loop = 1;
+    setsockopt(sock_, IPPROTO_IP, IP_MULTICAST_TTL, (const char*)&ttl, sizeof(ttl));
+    setsockopt(sock_, IPPROTO_IP, IP_MULTICAST_LOOP, (const char*)&loop, sizeof(loop));
+    running_ = true;
+    nextQuery_ = 0;
+    lastIfaceCheck_ = 0;
+    thread_ = std::thread(&MdnsBrowser::loop, this);
+    return true;
+}
+
+void MdnsBrowser::stop() {
+    running_ = false;
+    if (thread_.joinable()) thread_.join();
+    if (sock_ != MN_INVALID_SOCKET) sock_close(sock_);
+    sock_ = MN_INVALID_SOCKET;
+    joined_.clear();
+}
+
+std::vector<MdnsFound> MdnsBrowser::find(const std::string& type, uint64_t maxAgeMs) {
+    std::lock_guard<std::mutex> lk(m_);
+    std::vector<MdnsFound> out;
+    uint64_t now = now_ms();
+    for (auto& i : insts_) {
+        if (!i.srv || lower(i.type) != lower(type) || now - i.seen > maxAgeMs) continue;
+        for (auto& h : hosts_)
+            if (h.first == lower(i.host)) {
+                MdnsFound f;
+                f.instance = i.label;
+                f.type = i.type;
+                f.host = i.host;
+                f.ip = h.second;
+                f.port = i.port;
+                f.seen = i.seen;
+                out.push_back(f);
+                break;
+            }
+    }
+    return out;
+}
+
+void MdnsBrowser::sendQueries() {
+    std::vector<uint8_t> q = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    q[5] = (uint8_t)types_.size();
+    for (auto& t : types_) {
+        Name n = splitType(t);
+        n.push_back("local");
+        putName(q, n);
+        putU16(q, T_PTR);
+        putU16(q, 1);
+    }
+    auto ifs = list_ipv4_interfaces();
+    sockaddr_in to{};
+    to.sin_family = AF_INET;
+    to.sin_addr.s_addr = htonl(MDNS_GROUP);
+    to.sin_port = htons(5353);
+    for (auto& ni : ifs) {
+        in_addr ia;
+        ia.s_addr = ni.addr;
+        setsockopt(sock_, IPPROTO_IP, IP_MULTICAST_IF, (const char*)&ia, sizeof(ia));
+        sendto(sock_, (const char*)q.data(), (int)q.size(), 0, (sockaddr*)&to, sizeof(to));
+    }
+}
+
+void MdnsBrowser::loop() {
+    std::vector<uint8_t> buf(9000);
+    while (running_) {
+        uint64_t now = now_ms();
+        if (now - lastIfaceCheck_ > 5000 || lastIfaceCheck_ == 0) {
+            lastIfaceCheck_ = now;
+            for (auto& ni : list_ipv4_interfaces()) {
+                if (std::find(joined_.begin(), joined_.end(), ni.addr) != joined_.end()) continue;
+                ip_mreq mreq{};
+                mreq.imr_multiaddr.s_addr = htonl(MDNS_GROUP);
+                mreq.imr_interface.s_addr = ni.addr;
+                setsockopt(sock_, IPPROTO_IP, IP_ADD_MEMBERSHIP, (const char*)&mreq, sizeof(mreq));
+                joined_.push_back(ni.addr);
+                nextQuery_ = 0;  // new network: ask right away
+            }
+        }
+        if (now >= nextQuery_) {
+            sendQueries();
+            nextQuery_ = now + 4000;
+        }
+        if (sock_wait_readable(sock_, 200) <= 0) continue;
+        sockaddr_in from{};
+        socklen_t fl = sizeof(from);
+        int r = recvfrom(sock_, (char*)buf.data(), (int)buf.size(), 0, (sockaddr*)&from, &fl);
+        if (r > 12) handlePacket(buf.data(), (size_t)r);
+    }
+}
+
+void MdnsBrowser::handlePacket(const uint8_t* d, size_t n) {
+    if (!(d[2] & 0x80)) return;  // only responses
+    int qd = (d[4] << 8) | d[5];
+    int rr = ((d[6] << 8) | d[7]) + ((d[8] << 8) | d[9]) + ((d[10] << 8) | d[11]);
+    size_t pos = 12;
+    Name nm;
+    for (int i = 0; i < qd; i++) {
+        if (!readName(d, n, pos, nm) || pos + 4 > n) return;
+        pos += 4;
+    }
+    uint64_t now = now_ms();
+    std::lock_guard<std::mutex> lk(m_);
+    auto inst = [&](const std::string& label, const std::string& type) -> Inst& {
+        for (auto& i : insts_)
+            if (lower(i.label) == lower(label) && lower(i.type) == lower(type)) return i;
+        insts_.push_back(Inst{label, type, "", 0, 0, false});
+        return insts_.back();
+    };
+    for (int i = 0; i < rr; i++) {
+        if (!readName(d, n, pos, nm) || pos + 10 > n) return;
+        uint16_t type = (uint16_t)((d[pos] << 8) | d[pos + 1]);
+        uint32_t ttl = ((uint32_t)d[pos + 4] << 24) | ((uint32_t)d[pos + 5] << 16) | ((uint32_t)d[pos + 6] << 8) | d[pos + 7];
+        uint16_t len = (uint16_t)((d[pos + 8] << 8) | d[pos + 9]);
+        pos += 10;
+        if (pos + len > n) return;
+        size_t rd = pos;
+        pos += len;
+        if (type == T_PTR && nm.size() >= 3) {
+            // <type>._tcp.local -> <instance>.<type>._tcp.local
+            std::string svc = joinName(Name(nm.begin(), nm.end() - 1));
+            bool wanted = false;
+            for (auto& t : types_) wanted |= lower(t) == lower(svc);
+            Name target;
+            size_t p2 = rd;
+            if (!wanted || !readName(d, n, p2, target) || target.empty()) continue;
+            Inst& in = inst(target[0], svc);
+            if (ttl == 0) in.seen = 0;  // goodbye
+            else in.seen = now;
+        } else if (type == T_SRV && nm.size() >= 4 && len >= 7) {
+            std::string svc = joinName(Name(nm.begin() + 1, nm.end() - 1));
+            bool wanted = false;
+            for (auto& t : types_) wanted |= lower(t) == lower(svc);
+            if (!wanted) continue;
+            Name target;
+            size_t p2 = rd + 6;
+            if (!readName(d, n, p2, target)) continue;
+            Inst& in = inst(nm[0], svc);
+            in.port = (uint16_t)((d[rd + 4] << 8) | d[rd + 5]);
+            in.host = joinName(target);
+            in.srv = true;
+            in.seen = ttl == 0 ? 0 : now;
+        } else if (type == T_A && len == 4) {
+            std::string host = lower(joinName(nm));
+            uint32_t ip;
+            memcpy(&ip, d + rd, 4);
+            bool found = false;
+            for (auto& h : hosts_)
+                if (h.first == host) {
+                    h.second = ip;
+                    found = true;
+                }
+            if (!found) hosts_.push_back({host, ip});
+        }
+    }
+}
+
 }  // namespace mn

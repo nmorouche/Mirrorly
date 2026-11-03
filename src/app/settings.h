@@ -12,6 +12,7 @@ struct Settings {
     bool autoFullscreen = false;
     std::wstring theme = L"default";  // id of the selected theme
     bool usbAndroid = true;           // mirror Android phones plugged in over USB
+    bool wifiAndroid = true;          // connect to Android phones paired over Wi-Fi
     uint8_t seed[32] = {0};
     uint8_t deviceId[6] = {0};
     std::string pi;

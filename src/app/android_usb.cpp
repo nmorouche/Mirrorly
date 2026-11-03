@@ -92,7 +92,9 @@ void App::stopAdb() {
 
 mn::AndroidConfig App::androidConfig() const {
     mn::AndroidConfig c;
-    c.enabled = settings_.usbAndroid;
+    c.enabled = settings_.usbAndroid || settings_.wifiAndroid;
+    c.usb = settings_.usbAndroid;
+    c.wireless = settings_.wifiAndroid;
     int w = 1920, h = 1080;
     settings_.resolutionSize(w, h);
     c.maxSize = std::max(w, h);

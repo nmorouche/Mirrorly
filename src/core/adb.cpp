@@ -57,7 +57,7 @@ sock_t AdbClient::connectServer() {
     return s;
 }
 
-bool AdbClient::request(sock_t s, const std::string& service) {
+bool AdbClient::request(sock_t s, const std::string& service, int timeoutMs) {
     char hdr[8];
     snprintf(hdr, sizeof(hdr), "%04x", (unsigned)service.size());
     if (!sendStr(s, std::string(hdr, 4) + service)) {
@@ -65,7 +65,7 @@ bool AdbClient::request(sock_t s, const std::string& service) {
         return false;
     }
     char st[4];
-    if (!readExact(s, st, 4)) {
+    if (!readExact(s, st, 4, timeoutMs)) {
         error_ = "adb: no reply to " + service;
         return false;
     }
@@ -96,6 +96,37 @@ int AdbClient::serverVersion() {
     }
     sock_close(s);
     return v;
+}
+
+bool AdbClient::query(const std::string& service, std::string& reply, int timeoutMs) {
+    reply.clear();
+    sock_t s = connectServer();
+    if (s == MN_INVALID_SOCKET) return false;
+    bool ok = request(s, service, timeoutMs);
+    size_t n = 0;
+    char h[5] = {0};
+    if (ok) {
+        unsigned v = 0;
+        ok = readExact(s, h, 4, timeoutMs) && sscanf(h, "%4x", &v) == 1;
+        n = v;
+    }
+    if (ok && n) {
+        reply.resize(n);
+        ok = readExact(s, &reply[0], n, 2000);
+    }
+    if (!ok && reply.empty()) reply = error_.empty() ? "no answer from adb" : error_;
+    sock_close(s);
+    return ok;
+}
+
+bool AdbClient::pair(const std::string& hostPort, const std::string& code, std::string& reply) {
+    bool ok = query("host:pair:" + code + ":" + hostPort, reply, 30000);
+    return ok && reply.find("Successfully paired") != std::string::npos;
+}
+
+bool AdbClient::connect(const std::string& hostPort, std::string& reply) {
+    bool ok = query("host:connect:" + hostPort, reply, 15000);
+    return ok && (reply.compare(0, 12, "connected to") == 0 || reply.compare(0, 20, "already connected to") == 0);
 }
 
 void AdbClient::killServer() {
