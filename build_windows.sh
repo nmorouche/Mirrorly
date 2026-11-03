@@ -14,7 +14,9 @@ CXX=x86_64-w64-mingw32-g++-posix
 OUT=out/win; mkdir -p $OUT/obj
 INC="-I src/core -I src/app -I third_party/qrcodegen -I third_party/playfair -I third_party/monocypher -I third_party/tinyaes -I $FF/include"
 BUILD=${BUILD:-$(git rev-parse --short HEAD 2>/dev/null || echo dev)}
-CFLAGS="-O2 -DNDEBUG -DMIRRORLY_BUILD=\"$BUILD\" -DMIRRORLY_VERSION=\"$VERSION\" -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 $INC"
+# GitHub repository whose releases the app checks for updates
+REPO=${REPO:-nmorouche/Mirrorly}
+CFLAGS="-O2 -DNDEBUG -DMIRRORLY_BUILD=\"$BUILD\" -DMIRRORLY_REPO=\"$REPO\" -DMIRRORLY_VERSION=\"$VERSION\" -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 $INC"
 for f in third_party/playfair/*.c third_party/monocypher/*.c third_party/tinyaes/aes.c third_party/qrcodegen/qrcodegen.c src/core/native_media.c; do
   o=$OUT/obj/$(basename $f .c).o; [ $o -nt $f ] || $CC $CFLAGS -c $f -o $o
 done
@@ -37,5 +39,5 @@ x86_64-w64-mingw32-windres "-DVER_STR=\\\"$VERSION\\\"" "-DVER_NUM=$VER_NUM" res
 $CXX -municode -mwindows -static -s -o $OUT/Mirrorly.exe $OUT/obj/*.o \
   -L$FF/lib -lswscale -lavcodec -lavutil \
   -ld2d1 -ldwrite -lwindowscodecs -ldwmapi -lwinmm -lole32 -luuid -lshell32 -lshlwapi \
-  -lws2_32 -liphlpapi -lbcrypt -lgdi32 -luser32
+  -lws2_32 -liphlpapi -lbcrypt -lwinhttp -lgdi32 -luser32
 ls -la $OUT/Mirrorly.exe

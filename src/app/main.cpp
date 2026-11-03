@@ -113,6 +113,8 @@ bool App::init(HINSTANCE inst, int show) {
     startReceiver();
     startAndroid();
     checkUsbIphone();
+    cleanupAfterUpdate(justUpdated_);
+    SetTimer(hwnd_, 2, 5000, nullptr);  // first update check shortly after start
     return true;
 }
 
@@ -266,6 +268,11 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         return 0;
     }
     case WM_TIMER: {
+        if (w == 2) {
+            SetTimer(hwnd_, 2, 6 * 60 * 60 * 1000, nullptr);  // then every 6 hours
+            checkForUpdate(false);
+            return 0;
+        }
         uint64_t now = mn::now_ms();
         bool animate = false;
         bool inMirror = mirrorActive_ && !settingsOpen_;
@@ -371,7 +378,9 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         if (w == VK_F11 || (w == VK_RETURN && (GetKeyState(VK_MENU) & 0x8000))) setFullscreen(!fullscreen_);
         else if (w == VK_ESCAPE) {
             if (fullscreen_) setFullscreen(false);
-            else if (pairingOpen_) closePairing();
+            else if (updateDialog_) {
+                if (update_.state != UPD_DOWNLOADING && update_.state != UPD_READY) click(H_UPDATE_LATER);
+            } else if (pairingOpen_) closePairing();
             else if (settingsOpen_) click(H_BACK);
         } else if (w == 'M') {
             click(H_VOL_ICON);
@@ -511,6 +520,26 @@ void App::click(int hit) {
     case H_PAIR_RETRY:
         android_.startPairing();
         break;
+    case H_UPDATE:  // the "new version" button: straight to downloading
+        openUpdateDialog();
+        startUpdate();
+        break;
+    case H_UPDATE_NOW:
+        startUpdate();
+        break;
+    case H_UPDATE_LATER:
+        updateDialog_ = false;
+        if (update_.state == UPD_AVAILABLE) {
+            settings_.skippedUpdate = update_.version;
+            settings_.save();
+        }
+        if (update_.state == UPD_FAILED) update_.state = UPD_AVAILABLE;  // the button stays available
+        break;
+    case H_UPDATE_CHECK:
+        checkForUpdate(true);
+        break;
+    case H_UPDATE_SCRIM:
+        break;
     case H_FIREWALL:
     case H_FIREWALL_LINK:
         allowFirewall();
@@ -588,6 +617,13 @@ void App::setFullscreen(bool fs) {
     fullscreen_ = fs;
     lastMouseMove_ = mn::now_ms();
     InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::openUpdateDialog() {
+    closeVolume();
+    if (pairingOpen_) closePairing();
+    commitName();
+    updateDialog_ = true;
 }
 
 void App::openPairing() {
@@ -669,6 +705,14 @@ void App::handleEvent(Event* e) {
         break;
     case EV_SESSION_END:
         closeVolume();
+        if (updatePromptPending_) {
+            updatePromptPending_ = false;
+            updateDialog_ = true;
+        }
+        if (updateInstallPending_) {
+            updateInstallPending_ = false;
+            installUpdate();
+        }
         connecting_ = sessionActive_ = mirrorActive_ = audioActive_ = paused_ = haveFrame_ = false;
         audio_.stop();
         SafeRelease(video_);
@@ -735,6 +779,39 @@ void App::handleEvent(Event* e) {
                       (usbStatus_.wireless ? L" over Wi-Fi" : L" over USB"));
         break;
     }
+    case EV_UPDATE: {
+        int st = e->i;
+        bool manual = update_.state == UPD_CHECKING;
+        if (st == UPD_DOWNLOADING) {
+            if (update_.state == UPD_DOWNLOADING) update_.progress = e->f;
+            break;
+        }
+        if (update_.state >= UPD_DOWNLOADING && update_.state <= UPD_INSTALLING && st <= UPD_AVAILABLE) break;  // busy updating
+        if (st == UPD_NONE) {  // automatic check failed: stay quiet
+            if (manual) update_.state = UPD_NONE;
+            break;
+        }
+        if (update_.state == UPD_AVAILABLE && st == UPD_CHECK_FAILED) break;
+        update_.state = st;
+        if (!e->s1.empty()) update_.version = e->s1;
+        update_.error = e->s2;
+        if (!update_.error.empty() && update_.error[0] >= 'a' && update_.error[0] <= 'z') update_.error[0] -= 32;
+        if (st == UPD_UP_TO_DATE && manual) showToast(L"Mirrorly is up to date");
+        if (st == UPD_CHECK_FAILED) showToast(L"Couldn't check for updates: " + from_utf8(e->s2));
+        if (st == UPD_AVAILABLE && (manual || e->s1 != settings_.skippedUpdate) && !updateDialog_) {
+            if (mirrorActive_ || sessionActive_) updatePromptPending_ = true;  // don't interrupt a session
+            else openUpdateDialog();
+        }
+        if (st == UPD_READY) {
+            if (sessionActive_) {  // install when the session ends
+                updateInstallPending_ = true;
+                showToast(L"The update will install when mirroring stops");
+            } else {
+                installUpdate();
+            }
+        }
+        break;
+    }
     case EV_PAIRING:
         pair_.phase = (mn::PairingStatus::Phase)e->i;
         if (!e->s1.empty() || pair_.phase != mn::PairingStatus::Waiting) pair_.qr = e->s1;
@@ -779,7 +856,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     if (auto fn = (SetCtx)GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext"))
         fn((HANDLE)-4);  // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
 
+    // "--updated": started by the previous version right after an update; wait for it to exit
+    bool updated = wcsstr(GetCommandLineW(), L"--updated") != nullptr;
     HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Mirrorly.SingleInstance");
+    if (GetLastError() == ERROR_ALREADY_EXISTS && updated) {
+        DWORD w = WaitForSingleObject(mutex, 20000);
+        if (w == WAIT_OBJECT_0 || w == WAIT_ABANDONED) SetLastError(0);
+    }
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         HWND other = FindWindowW(L"MirrorlyWindow", nullptr);
         if (other) {
@@ -790,11 +873,25 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     }
     mn::net_init();
     App app;
+    app.justUpdated_ = updated;
     if (!app.init(inst, show)) {
         MessageBoxW(nullptr, L"Mirrorly could not start (Direct2D is unavailable).", kAppName, MB_ICONERROR);
         return 1;
     }
     int r = app.run();
-    if (mutex) CloseHandle(mutex);
+    std::wstring next = app.relaunch_;
+    if (mutex) {
+        ReleaseMutex(mutex);
+        CloseHandle(mutex);
+    }
+    if (!next.empty()) {  // an update was installed: start the new version
+        std::wstring cmd = L"\"" + next + L"\" --updated";
+        STARTUPINFOW si{sizeof(si)};
+        PROCESS_INFORMATION pi{};
+        if (CreateProcessW(next.c_str(), &cmd[0], nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        }
+    }
     return r;
 }

@@ -293,6 +293,74 @@ public:
         if (a.volumeOpen_) volumePopover(a, D2D1::RectF(cx, y - 18, cx + 36, y + 18), false, 1.0f, W, H, false);
     }
 
+    // ---------------------------------------------------------------- updates
+    void drawUpdateBadge(App& a, float W, float H) override {
+        bool failed = a.update_.state == UPD_FAILED;
+        std::wstring label = failed ? L"UPDATE FAILED. RETRY" : L"NEW VERSION " + from_utf8(a.update_.version) + L". UPDATE";
+        for (auto& ch : label) ch = towupper(ch);
+        float lw = a.pixelTextWidth(label, 1.5f);
+        float x = 26 + a.pixelTextWidth(L"MIRRORLY", 2.0f) + 18;
+        D2D1_RECT_F r = D2D1::RectF(x, 20, x + lw + 22, 44);
+        bool hov = a.hover_ == H_UPDATE;
+        bool blink = !hov && !failed && fmod(a.animTime(), 1.6) > 1.2;
+        a.fillRect(r, hov ? COBALT : (failed ? ALERT : INK));
+        a.pixelText(label, r.left + 11, r.top + 6.75f, 1.5f, hov ? WHITE : (blink ? WHITE : ACID));
+        a.addHit(H_UPDATE, r);
+        (void)W;
+        (void)H;
+    }
+
+    void drawUpdateDialog(App& a, float W, float H) override {
+        a.brush_->SetColor(D2D1::ColorF(0, 0, 0, 0.55f));
+        a.rt_->FillRectangle(D2D1::RectF(0, 0, W, H), a.brush_);
+        int st = a.update_.state;
+        bool failed = st == UPD_FAILED;
+        std::wstring ver = from_utf8(a.update_.version);
+        const float cw = std::min(460.0f, W - 40), ch = 236;
+        D2D1_RECT_F c = D2D1::RectF(W / 2 - cw / 2, H / 2 - ch / 2, W / 2 + cw / 2, H / 2 + ch / 2);
+        a.fillRect(D2D1::RectF(c.left + 8, c.top + 8, c.right + 8, c.bottom + 8), ACID);
+        a.fillRect(c, PAPER);
+        a.strokeRect(c, INK, 1.0f, 0, 2.0f);
+        D2D1_RECT_F head = D2D1::RectF(c.left, c.top, c.right, c.top + 46);
+        a.fillRect(head, failed ? ALERT : COBALT);
+        std::wstring ht = failed ? L"UPDATE FAILED" : (st == UPD_DOWNLOADING ? L"DOWNLOADING" : (st == UPD_AVAILABLE ? L"NEW VERSION" : L"INSTALLING"));
+        a.pixelText(ht, c.left + 18, c.top + 12, 3.0f, WHITE);
+        float vw = a.pixelTextWidth(L"V" + ver, 2.0f);
+        a.pixelText(L"V" + ver, c.right - 18 - vw, c.top + 16, 2.0f, ACID);
+        float y = head.bottom + 34;
+        IDWriteTextFormat* f = a.fmt(15, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+        if (st == UPD_DOWNLOADING) {
+            D2D1_RECT_F tr = D2D1::RectF(c.left + 18, y - 9, c.right - 18, y + 9);
+            a.strokeRect(tr, INK, 1.0f, 0, 1.5f);
+            float fx = tr.left + (tr.right - tr.left) * std::max(0.0f, std::min(1.0f, a.update_.progress));
+            if (fx > tr.left + 2) a.fillRect(D2D1::RectF(tr.left + 2, tr.top + 2, fx - 2, tr.bottom - 2), ACID);
+            std::wstring pct = std::to_wstring((int)(a.update_.progress * 100)) + L"%";
+            a.pixelText(pct, c.left + 18, y + 22, 2.0f, INK);
+        } else if (st == UPD_READY || st == UPD_INSTALLING) {
+            a.text(L"Mirrorly restarts in a moment.", D2D1::RectF(c.left + 18, y - 12, c.right - 18, y + 12), f, INK);
+        } else if (failed) {
+            a.text(from_utf8(a.update_.error), D2D1::RectF(c.left + 18, y - 14, c.right - 18, y + 30), f, INK);
+        } else {
+            a.text(std::wstring(L"You have V") + kVersion + L". Mirrorly downloads the new one and restarts by itself.",
+                   D2D1::RectF(c.left + 18, y - 14, c.right - 18, y + 30), f, INK);
+        }
+        if (st == UPD_AVAILABLE || failed) {
+            float by = c.bottom - 34;
+            std::wstring go = failed ? L"TRY AGAIN" : L"UPDATE NOW", no = failed ? L"CLOSE" : L"LATER";
+            float gw = a.pixelTextWidth(go, 2.0f) + 32, nw = a.pixelTextWidth(no, 2.0f) + 32;
+            D2D1_RECT_F gr = D2D1::RectF(c.right - 18 - gw, by - 17, c.right - 18, by + 17);
+            D2D1_RECT_F nr = D2D1::RectF(gr.left - 12 - nw, by - 17, gr.left - 12, by + 17);
+            bool hg = a.hover_ == H_UPDATE_NOW, hn = a.hover_ == H_UPDATE_LATER;
+            a.fillRect(gr, hg ? COBALT : INK);
+            a.pixelText(go, gr.left + 16, by - 7, 2.0f, hg ? WHITE : ACID);
+            if (hn) a.fillRect(nr, ACID);
+            a.strokeRect(nr, INK, 1.0f, 0, 1.5f);
+            a.pixelText(no, nr.left + 16, by - 7, 2.0f, INK);
+            a.addHit(H_UPDATE_NOW, gr);
+            a.addHit(H_UPDATE_LATER, nr);
+        }
+    }
+
     // ---------------------------------------------------------------- pairing over Wi-Fi
     void drawPairing(App& a, float W, float H) override {
         a.fillRect(D2D1::RectF(0, 0, W, H), PAPER);

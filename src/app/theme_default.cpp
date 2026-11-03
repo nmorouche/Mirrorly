@@ -225,6 +225,78 @@ public:
         a.addHit(H_FIREWALL_LINK, D2D1::RectF(lr.left - 6, lr.top - 4, lr.right + 6, lr.bottom + 4));
     }
 
+    // ---------------------------------------------------------------- updates
+    void drawUpdateBadge(App& a, float W, float H) override {
+        const Pal& p = pal(a);
+        bool failed = a.update_.state == UPD_FAILED;
+        std::wstring msg = failed ? L"The update didn't finish" : L"Version " + from_utf8(a.update_.version) + L" is available";
+        std::wstring act = failed ? L"Try again" : L"Update";
+        IDWriteTextFormat* f = a.fmt(13), *bf = a.fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+        float mw = a.textWidth(msg, f), aw = a.textWidth(act, bf);
+        D2D1_RECT_F r = D2D1::RectF(18, 14, 18 + 40 + mw + 12 + aw + 16, 46);
+        bool hov = a.hover_ == H_UPDATE;
+        roundFill(a, r, 16, p.accent, hov ? (p.dark ? 0.32f : 0.18f) : (p.dark ? 0.22f : 0.11f));
+        a.icon(G_DOWNLOAD, r.left + 20, 30, 14, p.accent);
+        a.text(msg, D2D1::RectF(r.left + 36, 14, r.left + 36 + mw + 4, 46), f, p.text);
+        a.text(act, D2D1::RectF(r.right - 16 - aw, 14, r.right - 12, 46), bf, hov ? p.accentHover : p.accent);
+        a.addHit(H_UPDATE, r);
+        (void)W;
+        (void)H;
+    }
+
+    void drawUpdateDialog(App& a, float W, float H) override {
+        const Pal& p = pal(a);
+        a.fillRect(D2D1::RectF(0, 0, W, H), 0x000000, p.dark ? 0.45f : 0.28f);
+        int st = a.update_.state;
+        std::wstring ver = from_utf8(a.update_.version);
+        const float cw = std::min(420.0f, W - 40), ch = 232;
+        D2D1_RECT_F c = D2D1::RectF(W / 2 - cw / 2, H / 2 - ch / 2, W / 2 + cw / 2, H / 2 + ch / 2);
+        a.softShadow(c, 16, p.dark ? 0.6f : 0.3f, 22, 10);
+        roundFill(a, c, 16, p.card);
+        hairlineBorder(a, c, 16, p.sep, p.borderA);
+        float cx = W / 2, y = c.top + 46;
+        bool failed = st == UPD_FAILED;
+        a.dot(cx, y, 24, failed ? p.red : p.accent, p.dark ? 0.22f : 0.12f);
+        a.icon(failed ? G_CLOSE : G_DOWNLOAD, cx, y, 20, failed ? p.red : p.accent);
+        y += 46;
+        std::wstring title = st == UPD_DOWNLOADING ? L"Downloading Mirrorly " + ver
+                           : (st == UPD_READY || st == UPD_INSTALLING) ? L"Installing Mirrorly " + ver
+                           : failed ? std::wstring(L"The update didn't finish")
+                                    : L"Mirrorly " + ver + L" is available";
+        a.text(title, D2D1::RectF(c.left + 20, y - 13, c.right - 20, y + 13),
+               a.fmt(18, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER, F_UI_DISPLAY), p.text);
+        y += 28;
+        IDWriteTextFormat* bf = a.fmt(13, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER);
+        if (st == UPD_DOWNLOADING) {
+            float bw = cw - 80;
+            D2D1_RECT_F tr = D2D1::RectF(cx - bw / 2, y - 3, cx + bw / 2, y + 3);
+            roundFill(a, tr, 3, p.text, 0.12f);
+            float fx = tr.left + bw * std::max(0.0f, std::min(1.0f, a.update_.progress));
+            if (fx > tr.left + 1) roundFill(a, D2D1::RectF(tr.left, tr.top, fx, tr.bottom), 3, p.accent);
+            a.text(std::to_wstring((int)(a.update_.progress * 100)) + L"%", D2D1::RectF(c.left, y + 10, c.right, y + 28), bf, p.text2);
+        } else if (st == UPD_READY || st == UPD_INSTALLING) {
+            a.activitySpinner(cx, y + 4, 9, p.text2);
+            a.text(L"Mirrorly restarts in a moment", D2D1::RectF(c.left, y + 16, c.right, y + 34), bf, p.text2);
+        } else if (failed) {
+            a.text(from_utf8(a.update_.error), D2D1::RectF(c.left + 24, y - 10, c.right - 24, y + 28), bf, p.text2);
+        } else {
+            a.text(std::wstring(L"You have version ") + kVersion + L". Mirrorly downloads the new one and restarts by itself.",
+                   D2D1::RectF(c.left + 28, y - 10, c.right - 28, y + 28), bf, p.text2);
+        }
+        if (st == UPD_AVAILABLE || failed) {
+            float by = c.bottom - 34, bw = (cw - 60) / 2;
+            D2D1_RECT_F later = D2D1::RectF(c.left + 20, by - 17, c.left + 20 + bw, by + 17);
+            D2D1_RECT_F now = D2D1::RectF(c.right - 20 - bw, by - 17, c.right - 20, by + 17);
+            bool hl = a.hover_ == H_UPDATE_LATER, hn = a.hover_ == H_UPDATE_NOW;
+            roundFill(a, later, 9, p.text, hl ? 0.12f : 0.07f);
+            a.text(failed ? L"Close" : L"Later", later, a.fmt(14, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER), p.text);
+            roundFill(a, now, 9, hn ? p.accentHover : p.accent);
+            a.text(failed ? L"Try again" : L"Update now", now, a.fmt(14, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER), 0xFFFFFF);
+            a.addHit(H_UPDATE_LATER, later);
+            a.addHit(H_UPDATE_NOW, now);
+        }
+    }
+
     // ---------------------------------------------------------------- pairing over Wi-Fi
     void drawPairing(App& a, float W, float H) override {
         const Pal& p = pal(a);
