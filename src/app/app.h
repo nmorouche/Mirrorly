@@ -67,7 +67,7 @@ struct Event {
     mn::ClientInfo client;
     float f = 0;
     bool b = false;
-    std::string s1, s2, s3;
+    std::string s1, s2, s3, s4;
     std::vector<uint8_t> data;
     double d1 = 0, d2 = 0;
     int i = 0;
@@ -180,7 +180,7 @@ public:
         post(EV_ANDROID_STATUS, [&](Event& e) { e.i = (int)s.state; e.s1 = s.device; e.s2 = s.detail; e.b = s.wireless; });
     }
     void onPairingStatus(const mn::PairingStatus& p) override {
-        post(EV_PAIRING, [&](Event& e) { e.i = (int)p.phase; e.s1 = p.qr; e.s2 = p.device; e.s3 = p.detail; });
+        post(EV_PAIRING, [&](Event& e) { e.i = (int)p.phase; e.s1 = p.qr; e.s2 = p.device; e.s3 = p.detail; e.s4 = p.codeTarget; });
     }
 
     static App* instance;
@@ -335,6 +335,8 @@ public:
     mn::AndroidStatus usbStatus_;
     bool pairingOpen_ = false;
     mn::PairingStatus pair_;
+    std::string pairTyped_;     // digits typed for "pair with a code"
+    uint64_t pairOpenedAt_ = 0;
     struct UpdateUi {
         int state = UPD_NONE;
         std::string version, error;  // version: the newer release

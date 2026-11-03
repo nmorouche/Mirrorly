@@ -34,7 +34,7 @@ struct Listener : ReceiverListener, AndroidStatusListener {
     std::mutex m;
     std::string client, model, clientIp;
     std::atomic<int> pairPhase{0};
-    std::string qr, pairDevice, pairDetail;
+    std::string qr, pairDevice, pairDetail, codeTarget;
     bool lastWireless = false;
     std::vector<AndroidState> states;
     std::string lastDevice;
@@ -76,9 +76,11 @@ struct Listener : ReceiverListener, AndroidStatusListener {
     }
     void onPairingStatus(const PairingStatus& p) override {
         static const char* names[] = {"Idle", "Waiting", "Pairing", "Connecting", "Done", "Failed"};
-        printf("  [pairing] %s %s %s\n", names[p.phase], p.device.c_str(), p.detail.c_str());
+        printf("  [pairing] %s %s %s%s%s\n", names[p.phase], p.device.c_str(), p.detail.c_str(),
+               p.codeTarget.empty() ? "" : " code offered by ", p.codeTarget.c_str());
         std::lock_guard<std::mutex> lk(m);
         if (!p.qr.empty()) qr = p.qr;
+        codeTarget = p.codeTarget;
         pairDevice = p.device;
         pairDetail = p.detail;
         pairPhase = p.phase;
@@ -254,8 +256,41 @@ int main(int argc, char** argv) {
     CHECK(waitFor([&] { return L.sessionStarts == s0 + 2 && L.frames > f0 + 5; }, 10000), "\"Mirror\" starts it");
     phone.stop();
 
+    printf("== pairing with a 6-digit code instead of the QR code\n");
+    am.disconnect();
+    waitFor([&] { return L.sessionEnds == 7; }, 3000);
+    adb.dropWifi();
+    adb.pairCode = "482913";
+    am.startPairing();
+    MdnsResponder phone2;
+    MdnsService offer;
+    offer.instance = "adb-FAKE2SERIAL-Qx7Lm2";  // what "Pair device with pairing code" advertises
+    offer.type = "_adb-tls-pairing._tcp";
+    offer.port = 38001;
+    CHECK(phone2.start("fake-android-phone-2", {offer}), "phone offers pairing with a code");
+    CHECK(waitFor([&] { std::lock_guard<std::mutex> lk(L.m); return !L.codeTarget.empty(); }, 15000), "Mirrorly sees the offer (%s)",
+          L.codeTarget.c_str());
+    int p0 = adb.pairs;
+    am.pairWithCode("111111");
+    CHECK(waitFor([&] { return L.pairPhase == PairingStatus::Failed; }, 10000) && adb.pairs == p0, "wrong code: %s", L.pairDetail.c_str());
+    am.startPairing();
+    CHECK(waitFor([&] { std::lock_guard<std::mutex> lk(L.m); return !L.codeTarget.empty() && L.pairPhase == PairingStatus::Waiting; }, 15000),
+          "try again: offer still seen");
+    am.pairWithCode("482913");
+    CHECK(waitFor([&] { return adb.pairs == p0 + 1; }, 10000), "paired with the typed code");
+    MdnsService conn2;
+    conn2.instance = "adb-FAKE2SERIAL-c0nn";
+    conn2.type = "_adb-tls-connect._tcp";
+    conn2.port = 41001;
+    phone2.update({conn2});
+    int s1 = L.sessionStarts;
+    CHECK(waitFor([&] { return L.pairPhase == PairingStatus::Done; }, 15000), "pairing done");
+    CHECK(waitFor([&] { return L.sessionStarts == s1 + 1; }, 10000) && adb.wifiSerial().find(":41001") != std::string::npos,
+          "mirroring over Wi-Fi after code pairing");
+    phone2.stop();
+
     am.stop();
-    CHECK(L.sessionEnds == 7, "stop() ends the session");
+    CHECK(L.sessionEnds == 8, "stop() ends the session");
 
     printf("== adb not available\n");
     {

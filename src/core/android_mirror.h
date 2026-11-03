@@ -61,6 +61,9 @@ struct AndroidStatus {
 struct PairingStatus {
     enum Phase { Idle, Waiting, Pairing, Connecting, Done, Failed } phase = Idle;
     std::string qr;      // text to show as a QR code while Waiting
+    // "Pair device with pairing code" on the phone: its address, when a phone is offering it
+    // (then the user types the 6-digit code the phone shows)
+    std::string codeTarget;
     std::string device;  // phone name once known
     std::string detail;  // error text for Failed
 };
@@ -95,6 +98,8 @@ public:
     // Wi-Fi pairing with a QR code; the status comes back through onPairingStatus.
     void startPairing();
     void cancelPairing();
+    // Pairs with the phone showing "Pair device with pairing code", using the code it displays.
+    void pairWithCode(const std::string& code);
     static bool isWireless(const std::string& serial);
     AndroidStatus status();
 
@@ -131,6 +136,8 @@ private:
     MdnsBrowser browser_;
     PairingStatus pair_;
     std::string pairName_, pairCode_;
+    std::string typedCode_;          // set by pairWithCode, consumed by the watcher thread
+    std::string codeTargetHp_;       // ip:port of the phone offering code pairing
     uint64_t pairStarted_ = 0;
     uint32_t pairedIp_ = 0;
     uint64_t autoStartUntil_ = 0;  // wireless phones that appear before this start mirroring

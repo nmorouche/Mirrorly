@@ -57,7 +57,13 @@ Android 11 and later can do the same over Wi-Fi, through *Wireless debugging*:
 1. Connect the phone to the same Wi-Fi network as the PC, and turn on Developer options (see above).
 2. In Mirrorly, click **Pair over Wi-Fi** on the home screen (or **Settings → Android → Pair**). A QR code appears.
 3. On the phone: **Settings → System → Developer options → Wireless debugging** → turn it on →
-   **Pair device with QR code**, and scan the code. Mirroring starts as soon as the phone is paired.
+   **Pair device with QR code**, and scan the code from that screen. Mirroring starts as soon as the phone is paired.
+
+   Scan it from *Wireless debugging*, not with the Camera app: the code uses Android's Wi-Fi QR format, so a
+   camera app would offer to join a Wi-Fi network called "mirrorly-…" instead.
+
+   No camera, or the scan doesn't work? Tap **Pair device with pairing code** instead. Mirrorly notices the phone
+   and asks for the 6-digit code it shows: just type it.
 
 You only pair once. Afterwards, whenever Wireless debugging is on, the phone shows up on the home screen
 as *available over Wi-Fi*: click **Mirror**. Many phones turn Wireless debugging off when they change network
@@ -128,7 +134,8 @@ to its own folder to update itself (Downloads or Documents are fine; `C:\Program
 | Android: "Tap Allow on your phone" | Unlock the phone and accept the *Allow USB debugging?* prompt. |
 | Android mirrors without sound | Sound needs Android 11 or later. |
 | Paired Android phone doesn't show up over Wi-Fi | Check that Wireless debugging is still on and the phone is on the same network. Click **Settings → Windows Firewall → Allow** so the PC can see the phone. |
-| Pairing waits forever | The phone and the PC must be on the same network (no guest Wi-Fi or client isolation). Turn Wireless debugging off and on, then scan again. |
+| Pairing waits forever | The phone and the PC must be on the same network (no guest Wi-Fi or client isolation). Click **Settings → Windows Firewall → Allow**, turn Wireless debugging off and on, then scan again. |
+| Scanning the code tries to join a Wi-Fi network | The code was scanned with the Camera app. Scan it from **Wireless debugging → Pair device with QR code** instead. |
 
 Mirrorly writes a `Mirrorly.log` next to the exe (or in `%APPDATA%\Mirrorly`). Check it first when something goes wrong.
 

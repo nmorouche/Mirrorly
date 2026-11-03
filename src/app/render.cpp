@@ -562,7 +562,10 @@ std::wstring App::pairingText(bool& busy, bool& error) const {
         return L"Android mirroring isn't available: " + from_utf8(usbStatus_.detail);
     }
     switch (pair_.phase) {
-    case P::Waiting: busy = true; return L"Waiting for your phone to scan the code…";
+    case P::Waiting:
+        if (!pair_.codeTarget.empty()) return L"Type the 6-digit code shown on the phone";
+        busy = true;
+        return L"Waiting for your phone to scan the code…";
     case P::Pairing: busy = true; return L"Pairing with your phone…";
     case P::Connecting: busy = true; return L"Paired. Connecting…";
     case P::Done: return L"Paired with " + (pair_.device.empty() ? std::wstring(L"your phone") : from_utf8(pair_.device));

@@ -376,7 +376,7 @@ public:
         float top = 104;
         // steps
         const wchar_t* titles[3] = {L"Same Wi-Fi as this PC", L"Developer options > Wireless debugging",
-                                    L"Pair device with QR code, then scan"};
+                                    L"Pair device with QR code. Scan from there, not the Camera app"};
         float y = top + 12;
         float tw = wide ? qx - bx - 40 : W - bx * 2;
         for (int i = 0; i < 3; i++) {
@@ -393,7 +393,27 @@ public:
         a.strokeRect(q, INK, 1.0f, 0, 2.0f);
         bool busy, error;
         std::wstring status = a.pairingText(busy, error);
-        if (a.pair_.phase == mn::PairingStatus::Waiting && !a.pair_.qr.empty()) {
+        bool codeMode = !a.pair_.codeTarget.empty() &&
+                        (a.pair_.phase == mn::PairingStatus::Waiting || a.pair_.phase == mn::PairingStatus::Pairing);
+        if (codeMode) {  // "Pair device with pairing code": type the 6 digits the phone shows
+            a.pixelText(L"CODE", q.left + 16, q.top + 18, 3.0f, INK);
+            a.text(L"Shown on the phone", D2D1::RectF(q.left + 16, q.top + 48, q.right - 10, q.top + 68), a.fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD), INK2);
+            const float bw = 28, gap = 6;
+            float bx0 = (q.left + q.right) / 2 - (6 * bw + 5 * gap) / 2, by = q.top + 100;
+            bool caretOn = fmod(a.animTime(), 1.0) < 0.6;
+            for (int i = 0; i < 6; i++) {
+                D2D1_RECT_F b = D2D1::RectF(bx0 + i * (bw + gap), by, bx0 + i * (bw + gap) + bw, by + 40);
+                bool cur = (int)a.pairTyped_.size() == i;
+                if (cur) a.fillRect(b, ACID);
+                a.strokeRect(b, INK, 1.0f, 0, cur ? 2.5f : 1.5f);
+                if (i < (int)a.pairTyped_.size())
+                    a.pixelText(std::wstring(1, (wchar_t)a.pairTyped_[i]), b.left + bw / 2 - 7.5f, by + 9.5f, 3.0f, INK);
+                else if (cur && caretOn && a.pair_.phase == mn::PairingStatus::Waiting)
+                    a.fillRect(D2D1::RectF(b.left + bw / 2 - 1, by + 10, b.left + bw / 2 + 1, by + 30), INK);
+            }
+            a.text(L"PHONE AT " + from_utf8(a.pair_.codeTarget), D2D1::RectF(q.left + 16, q.bottom - 40, q.right - 10, q.bottom - 18),
+                   a.fmt(12, DWRITE_FONT_WEIGHT_SEMI_BOLD), INK3);
+        } else if (a.pair_.phase == mn::PairingStatus::Waiting && !a.pair_.qr.empty()) {
             a.drawQr(a.pair_.qr, D2D1::RectF(q.left + 8, q.top + 8, q.right - 8, q.bottom - 8), INK, 0xFFFFFF);
         } else {
             a.drawHalftoneOrb((q.left + q.right) / 2, (q.top + q.bottom) / 2, qrSide * 0.3f, a.animTime() * 1.5,
@@ -415,8 +435,15 @@ public:
             a.pixelText(L"TRY AGAIN", br.left + 14, br.top + 9, 2.0f, hov ? WHITE : ACID);
             a.addHit(H_PAIR_RETRY, br);
         }
+        float ny = H - 44;
+        if (a.pair_.phase == mn::PairingStatus::Waiting && mn::now_ms() - a.pairOpenedAt_ > 30000) {
+            posterLink(a, H_FIREWALL_LINK, L"Nothing happens on the phone? Allow Mirrorly in the firewall", bx, ny - 30, false);
+        } else if (a.pair_.phase == mn::PairingStatus::Waiting && !codeMode) {
+            a.text(L"Can't scan? Pair device with pairing code on the phone instead.", D2D1::RectF(bx, ny - 42, W - 28, ny - 20),
+                   a.fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD), INK);
+        }
         a.text(L"Pair once. After that the phone shows up whenever Wireless debugging is on. Android 11+.",
-               D2D1::RectF(bx, H - 44, W - 28, H - 22), a.fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD), INK2);
+               D2D1::RectF(bx, ny, W - 28, H - 22), a.fmt(13, DWRITE_FONT_WEIGHT_SEMI_BOLD), INK2);
     }
 
     // ---------------------------------------------------------------- mirroring

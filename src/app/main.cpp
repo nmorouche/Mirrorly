@@ -390,6 +390,19 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
             if (!volumeOpen_) showToast(L"Volume " + std::to_wstring(settings_.volume) + L"%");
         }
         return 0;
+    case WM_CHAR:
+        // pairing with a code: the 6 digits the phone shows
+        if (pairingOpen_ && pair_.phase == mn::PairingStatus::Waiting && !pair_.codeTarget.empty()) {
+            if (w >= '0' && w <= '9' && pairTyped_.size() < 6) {
+                pairTyped_ += (char)w;
+                if (pairTyped_.size() == 6) android_.pairWithCode(pairTyped_);
+            } else if (w == VK_BACK && !pairTyped_.empty()) {
+                pairTyped_.pop_back();
+            }
+            InvalidateRect(hwnd_, nullptr, FALSE);
+            return 0;
+        }
+        break;
     case WM_SYSKEYDOWN:
         if (w == VK_RETURN) {
             setFullscreen(!fullscreen_);
@@ -518,6 +531,8 @@ void App::click(int hit) {
         closePairing();
         break;
     case H_PAIR_RETRY:
+        pairTyped_.clear();
+        pairOpenedAt_ = mn::now_ms();
         android_.startPairing();
         break;
     case H_UPDATE:  // the "new version" button: straight to downloading
@@ -635,6 +650,8 @@ void App::openPairing() {
     settingsOpen_ = false;
     pairingOpen_ = true;
     pair_ = mn::PairingStatus();
+    pairTyped_.clear();
+    pairOpenedAt_ = mn::now_ms();
     android_.startPairing();
 }
 
@@ -817,6 +834,8 @@ void App::handleEvent(Event* e) {
         if (!e->s1.empty() || pair_.phase != mn::PairingStatus::Waiting) pair_.qr = e->s1;
         pair_.device = e->s2;
         pair_.detail = e->s3;
+        if (e->s4 != pair_.codeTarget || pair_.phase == mn::PairingStatus::Failed) pairTyped_.clear();
+        pair_.codeTarget = e->s4;
         if (pair_.phase == mn::PairingStatus::Done && pairingOpen_) {
             pairingOpen_ = false;
             showToast(L"Paired with " + (e->s2.empty() ? std::wstring(L"your phone") : from_utf8(e->s2)) + L". Starting mirroring…");

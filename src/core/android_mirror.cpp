@@ -610,6 +610,8 @@ void AndroidMirror::startPairing() {
         pairStarted_ = now_ms();
         pair_ = PairingStatus();
         pair_.phase = PairingStatus::Waiting;
+        typedCode_.clear();
+        codeTargetHp_.clear();
         // the format Android's "Pair device with QR code" scanner understands
         pair_.qr = "WIFI:T:ADB;S:" + name + ";P:" + code + ";;";
         copy = pair_;
@@ -617,6 +619,12 @@ void AndroidMirror::startPairing() {
     LOGI("android: waiting for a phone to scan the pairing code (%s)", name.c_str());
     browser_.queryNow();
     if (statusListener_) statusListener_->onPairingStatus(copy);
+}
+
+void AndroidMirror::pairWithCode(const std::string& code) {
+    std::lock_guard<std::mutex> lk(m_);
+    typedCode_ = code;
+    lastWirelessTick_ = 0;  // handle it on the next tick
 }
 
 void AndroidMirror::cancelPairing() {
@@ -646,19 +654,50 @@ void AndroidMirror::wirelessTick() {
     }
     if (!browser_.running() && !browser_.start({"_adb-tls-pairing._tcp", "_adb-tls-connect._tcp"})) return;
 
-    // 1. pairing: the phone that scanned our code advertises "<name>._adb-tls-pairing._tcp"
+    // 1. pairing. With the QR code, the phone that scanned it advertises
+    //    "<name>._adb-tls-pairing._tcp". With "Pair device with pairing code", the phone advertises
+    //    a pairing service under its own name and the user types the code it shows.
     if (phase == PairingStatus::Waiting) {
-        if (now - pairStarted_ > 5 * 60 * 1000) {
-            setPairing(PairingStatus::Failed, "", "No phone scanned the code");
+        if (now - pairStarted_ > 10 * 60 * 1000) {
+            setPairing(PairingStatus::Failed, "", "No phone answered. Try again.");
             return;
         }
+        std::string typed, target;
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            typed = typedCode_;
+            typedCode_.clear();
+        }
+        std::vector<MdnsFound> offers;
+        for (auto& f : browser_.find("_adb-tls-pairing._tcp", 30000))
+            if (f.instance != name) offers.push_back(f);
+        // the newest code-pairing offer is the one on screen right now
+        const MdnsFound* offer = nullptr;
+        for (auto& f : offers)
+            if (!offer || f.seen > offer->seen) offer = &f;
+        target = offer ? ip_to_string(offer->ip) + ":" + std::to_string(offer->port) : "";
+        bool changed = false;
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            if (target != codeTargetHp_) {
+                codeTargetHp_ = target;
+                pair_.codeTarget = offer ? ip_to_string(offer->ip) : "";
+                changed = true;
+            }
+        }
+        if (changed) {
+            if (offer) LOGI("android: a phone offers pairing with a code at %s", target.c_str());
+            setPairing(PairingStatus::Waiting, "", "");
+        }
         for (auto& f : browser_.find("_adb-tls-pairing._tcp", 60000)) {
-            if (f.instance != name) continue;
+            bool qrMatch = f.instance == name;
+            bool codeMatch = !typed.empty() && offer && f.instance == offer->instance;
+            if (!qrMatch && !codeMatch) continue;
             std::string hp = ip_to_string(f.ip) + ":" + std::to_string(f.port);
-            LOGI("android: pairing with the phone at %s", hp.c_str());
+            LOGI("android: pairing with the phone at %s (%s)", hp.c_str(), qrMatch ? "QR code" : "pairing code");
             setPairing(PairingStatus::Pairing, "", "");
             std::string reply;
-            if (adb_.pair(hp, code, reply)) {
+            if (adb_.pair(hp, qrMatch ? code : typed, reply)) {
                 LOGI("android: %s", reply.c_str());
                 {
                     std::lock_guard<std::mutex> lk(m_);
@@ -670,10 +709,13 @@ void AndroidMirror::wirelessTick() {
                 browser_.queryNow();
             } else {
                 LOGW("android: pairing failed: %s", reply.c_str());
-                setPairing(PairingStatus::Failed, "", reply.empty() ? "Pairing failed" : reply);
+                std::string why = reply.empty() ? "Pairing failed" : reply;
+                if (!qrMatch && reply.find("Wrong password") != std::string::npos) why = "Wrong code. Check the code on the phone and try again.";
+                setPairing(PairingStatus::Failed, "", why);
             }
             return;
         }
+        if (!typed.empty()) setPairing(PairingStatus::Failed, "", "The phone stopped offering a pairing code. Try again.");
     }
     if (phase == PairingStatus::Connecting && now > autoStartUntil_) {
         setPairing(PairingStatus::Failed, "", "Paired, but the phone didn't connect. Is it on the same Wi-Fi as this PC?");

@@ -320,10 +320,10 @@ public:
         if (!p.dark) a.softShadow(card, 12, p.shadow, 8, 3);
         roundFill(a, card, 12, p.card);
         hairlineBorder(a, card, 12, p.sep, p.borderA);
-        const wchar_t* titles[3] = {L"Join the same Wi-Fi", L"Open Wireless debugging", L"Scan this code"};
+        const wchar_t* titles[3] = {L"Join the same Wi-Fi", L"Open Wireless debugging", L"Tap “Pair device with QR code”"};
         const wchar_t* descs[3] = {L"The phone and this PC must be on the same network",
-                                   L"Settings › Developer options › Wireless debugging",
-                                   L"Tap “Pair device with QR code”, then point the camera here"};
+                                   L"Settings › System › Developer options › Wireless debugging",
+                                   L"Scan from that screen, not with the Camera app"};
         for (int i = 0; i < 3; i++) {
             float ry = card.top + rowH * i + rowH / 2;
             a.dot(card.left + 27, ry, 11, p.accent, p.dark ? 0.22f : 0.12f);
@@ -342,8 +342,32 @@ public:
         hairlineBorder(a, qr, 16, p.sep, p.borderA);
         bool busy, error;
         std::wstring status = a.pairingText(busy, error);
-        bool showQr = a.pair_.phase == mn::PairingStatus::Waiting && !a.pair_.qr.empty();
-        if (showQr) {
+        bool codeMode = !a.pair_.codeTarget.empty() &&
+                        (a.pair_.phase == mn::PairingStatus::Waiting || a.pair_.phase == mn::PairingStatus::Pairing);
+        bool showQr = a.pair_.phase == mn::PairingStatus::Waiting && !a.pair_.qr.empty() && !codeMode;
+        if (codeMode) {  // the phone shows "Pair device with pairing code": type its 6 digits
+            float qcx = (qr.left + qr.right) / 2;
+            a.text(L"Pairing code", D2D1::RectF(qr.left, qr.top + 34, qr.right, qr.top + 56),
+                   a.fmt(15, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER), 0x1D1D1F);
+            a.text(L"Shown on the phone", D2D1::RectF(qr.left, qr.top + 56, qr.right, qr.top + 74),
+                   a.fmt(12, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER), 0x6E6E73);
+            const float bw = 26, gap = 6;
+            float bx = qcx - (6 * bw + 5 * gap) / 2, by = qr.top + 98;
+            bool caretOn = fmod(a.animTime(), 1.0) < 0.6;
+            for (int i = 0; i < 6; i++) {
+                D2D1_RECT_F b = D2D1::RectF(bx + i * (bw + gap), by, bx + i * (bw + gap) + bw, by + 36);
+                bool cur = (int)a.pairTyped_.size() == i;
+                roundFill(a, b, 7, 0xF2F2F7);
+                a.strokeRect(b, cur ? p.accent : 0xD1D1D6, 1.0f, 7, cur ? 2.0f : 1.0f);
+                if (i < (int)a.pairTyped_.size())
+                    a.text(std::wstring(1, (wchar_t)a.pairTyped_[i]), b,
+                           a.fmt(20, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER, F_UI_DISPLAY), 0x1D1D1F);
+                else if (cur && caretOn && a.pair_.phase == mn::PairingStatus::Waiting)
+                    a.line(b.left + bw / 2, b.top + 9, b.left + bw / 2, b.bottom - 9, p.accent, 1.0f, 1.5f);
+            }
+            a.text(L"Phone at " + from_utf8(a.pair_.codeTarget), D2D1::RectF(qr.left, qr.bottom - 40, qr.right, qr.bottom - 20),
+                   a.fmt(11, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER), 0x8E8E93);
+        } else if (showQr) {
             a.drawQr(a.pair_.qr, D2D1::RectF(qr.left + 10, qr.top + 10, qr.right - 10, qr.bottom - 10), 0x000000, 0xFFFFFF);
         } else if (busy) {
             a.activitySpinner((qr.left + qr.right) / 2, (qr.top + qr.bottom) / 2, 14, 0x6E6E73);
@@ -357,7 +381,7 @@ public:
         float sw = std::min(a.textWidth(status, sf), W - 80);
         float sx = W / 2 - (sw + 18) / 2;
         if (busy) a.activitySpinner(sx + 6, y, 7, p.text2);
-        else a.dot(sx + 5, y, 4, error ? p.red : p.green);
+        else a.dot(sx + 5, y, 4, error ? p.red : codeMode ? p.accent : p.green);
         a.text(status, D2D1::RectF(sx + 18, y - 11, sx + 18 + sw + 4, y + 11), sf, error ? p.text : p.text2);
         y += 34;
         if (error) {
@@ -369,8 +393,23 @@ public:
             a.addHit(H_PAIR_RETRY, b);
             y += 40;
         }
+        IDWriteTextFormat* nf = a.fmt(12, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER);
+        if (showQr) {
+            a.text(L"Can't scan? Tap “Pair device with pairing code” on the phone instead.", D2D1::RectF(24, y - 9, W - 24, y + 9), nf, p.text2);
+            y += 22;
+        }
+        if (a.pair_.phase == mn::PairingStatus::Waiting && mn::now_ms() - a.pairOpenedAt_ > 30000) {
+            std::wstring fw = L"Nothing happens on the phone? Allow Mirrorly in Windows Firewall";
+            IDWriteTextFormat* lf = a.fmt(12, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
+            float lw = a.textWidth(fw, lf);
+            D2D1_RECT_F lr = D2D1::RectF(W / 2 - lw / 2, y - 9, W / 2 + lw / 2, y + 9);
+            bool hov = a.hover_ == H_FIREWALL_LINK;
+            a.text(fw, lr, lf, hov ? p.accentHover : p.accent);
+            a.addHit(H_FIREWALL_LINK, lr);
+            y += 22;
+        }
         a.text(L"Pair once: afterwards the phone appears in Mirrorly whenever Wireless debugging is on.",
-               D2D1::RectF(24, y - 9, W - 24, y + 9), a.fmt(12, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER), p.text3);
+               D2D1::RectF(24, y - 9, W - 24, y + 9), nf, p.text3);
     }
 
     // ---------------------------------------------------------------- now playing
