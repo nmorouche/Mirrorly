@@ -237,6 +237,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         SendMessageW(edit_, EM_LIMITTEXT, 48, 0);
         editOrigProc_ = (WNDPROC)SetWindowLongPtrW(edit_, GWLP_WNDPROC, (LONG_PTR)EditProc);
         editBrush_ = CreateSolidBrush(RGB(0xFF, 0xFF, 0xFF));
+        AddClipboardFormatListener(hwnd_);  // WM_CLIPBOARDUPDATE: text copied on the PC goes to the phone
         return 0;
     }
     case WM_SIZE:
@@ -393,8 +394,11 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
     case WM_KILLFOCUS:
         releasePhoneInput();
         break;
-    case WM_ACTIVATE:
-        // back in Mirrorly after copying something elsewhere: the phone gets it too
+    case WM_CLIPBOARDUPDATE:
+        // copied on the PC (even with Mirrorly minimized): the phone gets it, ready to paste
+        sharePcClipboard(false);
+        return 0;
+    case WM_ACTIVATE:  // in case a clipboard notification was missed
         if (LOWORD(w) != WA_INACTIVE) sharePcClipboard(false);
         break;
     case WM_KEYUP:
@@ -476,6 +480,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         }
         return 0;
     case WM_DESTROY:
+        RemoveClipboardFormatListener(hwnd_);
         KillTimer(hwnd_, 1);
         discardDeviceResources();
         PostQuitMessage(0);

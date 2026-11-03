@@ -92,8 +92,9 @@ per phone and per orientation; **Keys off** lets the keyboard type normally agai
 
 **Copy and paste** work both ways while the phone is controlled. Text copied on the phone (with
 <kbd>Ctrl</kbd>+<kbd>C</kbd>, or the phone's own Copy menu) goes straight to the PC's clipboard. Text copied on
-the PC goes to the phone's clipboard when you switch back to Mirrorly, so the phone's own Paste works too;
-<kbd>Ctrl</kbd>+<kbd>V</kbd> pastes it directly. Only text is shared, not images or files.
+the PC goes to the phone's clipboard right away, even with Mirrorly minimized, so the phone's own Paste works;
+<kbd>Ctrl</kbd>+<kbd>V</kbd> in Mirrorly pastes it directly. Passwords copied from a password manager are only
+sent with <kbd>Ctrl</kbd>+<kbd>V</kbd>. Only text is shared, not images or files.
 
 Both can be turned off in **Settings → Android** (*Control the phone*, which also covers the clipboard,
 *Game controllers*).

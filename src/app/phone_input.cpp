@@ -3,7 +3,7 @@
 // Mouse: left button = finger (tap, drag, swipe), right button = Back, middle button = Home,
 // wheel = scroll. Keyboard: keys and text go to the phone.
 // Clipboard: text copied on the phone lands on the PC's clipboard; text copied on the PC goes to
-// the phone when Mirrorly comes back to the front, and Ctrl+V pastes it there.
+// the phone right away (Mirrorly may be minimized), and Ctrl+V pastes it there.
 // Key zones: spots on the screen bound to a key or a combination (e.g. "A", "Ctrl+A"); while
 // the key is held, the spot is touched, so games can be played with the keyboard. Game
 // controllers (XInput) appear on the phone as an Xbox 360 pad.
@@ -369,12 +369,33 @@ void App::phoneCopied(const std::string& utf8) {
     showToast(L"Copied from your phone");
 }
 
+// Password managers mark what they copy as private (the formats Windows' clipboard history honours).
+static bool privateClipboard() {
+    static const UINT exclude = RegisterClipboardFormatW(L"ExcludeClipboardContentFromMonitorProcessing");
+    static const UINT history = RegisterClipboardFormatW(L"CanIncludeInClipboardHistory");
+    if (exclude && IsClipboardFormatAvailable(exclude)) return true;
+    if (!history || !IsClipboardFormatAvailable(history) || !OpenClipboard(nullptr)) return false;
+    bool no = false;
+    HANDLE h = GetClipboardData(history);
+    const DWORD* v = h && GlobalSize(h) >= sizeof(DWORD) ? (const DWORD*)GlobalLock(h) : nullptr;
+    if (v) {
+        no = *v == 0;
+        GlobalUnlock(h);
+    }
+    CloseClipboard();
+    return no;
+}
+
 void App::sharePcClipboard(bool paste) {
     auto ctl = android_.control();
     if (!ctl || !clientIsAndroid() || !settings_.controlAndroid) return;
     DWORD seq = GetClipboardSequenceNumber();
-    if (!paste && seq == clipSeq_) return;  // nothing new since the last exchange
+    if (!paste && seq == clipSeq_) return;  // nothing new since the last exchange (or our own write)
     clipSeq_ = seq;
+    if (!paste && privateClipboard()) {  // passwords only go to the phone with an explicit Ctrl+V
+        LOGI("clipboard: private copy (password manager) not shared with the phone");
+        return;
+    }
     std::wstring t = readPcClipboard(hwnd_);
     if (t.empty() || (!paste && t == lastClip_)) return;
     lastClip_ = t;
