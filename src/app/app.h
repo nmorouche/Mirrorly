@@ -51,14 +51,17 @@ static inline D2D1_COLOR_F rgb(uint32_t c, float a = 1.0f) {
 // icon glyphs (Segoe Fluent Icons / Segoe MDL2 Assets)
 static const wchar_t G_SETTINGS = 0xE713, G_BACK = 0xE72B, G_CLOSE = 0xE711, G_FULL = 0xE740, G_WINDOW = 0xE73F,
                      G_VOLUME = 0xE767, G_MUTE = 0xE74F, G_MUSIC = 0xE8D6, G_SHIELD = 0xEA18, G_LOCK = 0xE72E,
-                     G_CHECK = 0xE73E, G_USB = 0xE88E, G_WIFI = 0xE701;
+                     G_CHECK = 0xE73E, G_USB = 0xE88E, G_WIFI = 0xE701, G_DOWNLOAD = 0xE896, G_REFRESH = 0xE72C;
 
 // ------------------------------------------------------------------ events from the engine
 enum EvType {
     EV_CONNECTING, EV_SESSION_START, EV_SESSION_END, EV_MIRROR_START, EV_MIRROR_STOP, EV_PAUSED, EV_AUDIO_START,
     EV_AUDIO_STOP, EV_VOLUME, EV_METADATA, EV_ARTWORK, EV_PROGRESS, EV_FIREWALL_DONE, EV_ANDROID_STATUS,
-    EV_PAIRING
+    EV_PAIRING, EV_UPDATE
 };
+// update states (App::update_.state)
+enum UpdState { UPD_NONE, UPD_CHECKING, UPD_UP_TO_DATE, UPD_CHECK_FAILED, UPD_AVAILABLE, UPD_DOWNLOADING, UPD_READY,
+                UPD_INSTALLING, UPD_FAILED };
 struct Event {
     EvType type;
     mn::ClientInfo client;
@@ -75,6 +78,7 @@ enum Hit {
     H_NONE, H_SETTINGS, H_BACK, H_FIREWALL, H_RES0, H_RES1, H_RES2, H_RES3, H_FPS30, H_FPS60, H_AUDIO, H_AUTOFS,
     H_MUTE, H_FULLSCREEN, H_DISCONNECT, H_OPENLOG, H_FIREWALL_LINK, H_NAMEBOX, H_THEME_STRIP, H_ANDROID, H_USB_ACTION,
     H_VOL_POPOVER, H_VOL_ICON, H_VOL_SLIDER, H_ANDROID_WIFI, H_PAIR, H_PAIR_CLOSE, H_PAIR_RETRY,
+    H_UPDATE, H_UPDATE_NOW, H_UPDATE_LATER, H_UPDATE_CHECK, H_UPDATE_SCRIM,
     H_THEME = 100
 };
 
@@ -113,6 +117,9 @@ public:
     virtual void drawToast(App&, float W, float H, const std::wstring& msg, float alpha) = 0;
     // pairing an Android phone over Wi-Fi: steps, QR code (App::drawQr) and progress
     virtual void drawPairing(App&, float W, float H) = 0;
+    // updates: a small "new version" button on the home screen, and the update dialog
+    virtual void drawUpdateBadge(App&, float W, float H) = 0;
+    virtual void drawUpdateDialog(App&, float W, float H) = 0;
     // thumbnail for the theme picker
     virtual void drawPreview(App&, D2D1_RECT_F r) = 0;
 
@@ -216,6 +223,13 @@ public:
     bool clientIsAndroid() const { return client_.model == "Android"; }
     void openPairing();
     void closePairing();
+    // updates (updater.cpp)
+    static bool versionNewer(const std::string& a, const std::string& b);
+    void checkForUpdate(bool manual);
+    void startUpdate();
+    void installUpdate();
+    void cleanupAfterUpdate(bool justUpdated);
+    void openUpdateDialog();
 
     // ---- rendering (render.cpp)
     bool createDeviceResources();
@@ -321,6 +335,13 @@ public:
     mn::AndroidStatus usbStatus_;
     bool pairingOpen_ = false;
     mn::PairingStatus pair_;
+    struct UpdateUi {
+        int state = UPD_NONE;
+        std::string version, error;  // version: the newer release
+        float progress = 0;
+    } update_;
+    bool updateDialog_ = false, updatePromptPending_ = false, updateInstallPending_ = false, justUpdated_ = false;
+    std::wstring relaunch_;  // set when an update is installed: started after the app closes
     bool iphoneUsb_ = false;        // an iPhone shares its connection over USB (Personal Hotspot)
     uint64_t ifaceCheck_ = 0;
     std::atomic<bool> startedAdb_{false};

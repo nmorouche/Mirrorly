@@ -103,6 +103,19 @@ Click the gear icon:
 
 Settings are saved in `%APPDATA%\Mirrorly\settings.ini`.
 
+## Updates
+
+Mirrorly checks the project's GitHub Releases when it starts and every few hours. When a newer version is out,
+it asks whether to update:
+
+- **Update now** downloads the new `Mirrorly.exe`, checks it against the release's SHA-256 checksum, puts it in
+  place of the running one and restarts. No browser, no installer.
+- **Later** keeps the current version. A *New version* button stays on the home screen (and in
+  **Settings → Updates**) for when you're ready.
+
+Updates never interrupt mirroring: the question waits until the session ends. Mirrorly needs to be able to write
+to its own folder to update itself (Downloads or Documents are fine; `C:\Program Files` is not).
+
 ## Troubleshooting
 
 | Problem | Fix |
@@ -161,6 +174,7 @@ src/app/           Windows app (Win32, Direct2D, DirectWrite, waveOut)
   theme_poster.cpp   Acid poster theme
   themes.cpp         theme registry
   android_usb.cpp    bundled adb, iPhone-over-USB detection
+  updater.cpp        update check, download, checksum and self-replacement
 tests/             simulated iPhone and Android phone for end-to-end tests
 third_party/       playfair, Monocypher, tiny-AES, qrcodegen
 res/               icon, manifest, resources
@@ -196,6 +210,8 @@ git push origin v1.0.0
 ```
 
 The version number in the tag is written into the app's About text and its Windows file properties.
+Installed copies of Mirrorly find the new release by themselves and offer to update.
+The release must contain `Mirrorly.exe` and `Mirrorly.exe.sha256` (the workflow uploads both).
 To build locally with a version: `VERSION=1.0.0 ./build_windows.sh`.
 
 ### Tests

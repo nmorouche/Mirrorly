@@ -13,6 +13,7 @@ struct Settings {
     std::wstring theme = L"default";  // id of the selected theme
     bool usbAndroid = true;           // mirror Android phones plugged in over USB
     bool wifiAndroid = true;          // connect to Android phones paired over Wi-Fi
+    std::string skippedUpdate;        // version the user said "Later" to (no automatic prompt for it)
     uint8_t seed[32] = {0};
     uint8_t deviceId[6] = {0};
     std::string pi;

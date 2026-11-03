@@ -39,7 +39,7 @@ jobs:
       - name: Build Mirrorly.exe
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="0.0.0"; fi
-          VERSION="$VERSION" ./build_windows.sh
+          VERSION="$VERSION" REPO="$GITHUB_REPOSITORY" ./build_windows.sh
           mkdir -p dist
           cp out/win/Mirrorly.exe dist/Mirrorly.exe
           (cd dist && sha256sum Mirrorly.exe > Mirrorly.exe.sha256)

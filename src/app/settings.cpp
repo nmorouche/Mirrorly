@@ -68,6 +68,7 @@ void Settings::load() {
     theme = readStr(L"Theme", L"default");
     usbAndroid = readInt(L"AndroidUSB", 1) != 0;
     wifiAndroid = readInt(L"AndroidWiFi", 1) != 0;
+    skippedUpdate = to_utf8(readStr(L"SkippedUpdate", L""));
     volume = std::max(0, std::min(100, readInt(L"Volume", 100)));
 
     bool dirty = false;
@@ -110,6 +111,7 @@ void Settings::save() const {
     writeStr(L"Theme", theme);
     writeStr(L"AndroidUSB", usbAndroid ? L"1" : L"0");
     writeStr(L"AndroidWiFi", wifiAndroid ? L"1" : L"0");
+    writeStr(L"SkippedUpdate", from_utf8(skippedUpdate));
     writeStr(L"Volume", std::to_wstring(volume));
     writeStr(L"Key", from_utf8(mn::hex_encode(seed, 32)));
     writeStr(L"DeviceId", from_utf8(mn::hex_encode(deviceId, 6)));

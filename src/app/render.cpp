@@ -718,6 +718,31 @@ void App::drawSettings(float W, float H) {
                          : L"Turn on Personal Hotspot on the iPhone, then plug it in");
     y = g.bottom + gap;
 
+    // ---- Updates
+    y = t.sectionTitle(*this, x0, x1, y, L"Updates");
+    g = D2D1::RectF(x0, y, x1, y + rowH);
+    t.group(*this, g, 1, rowH);
+    cy = g.top + rowH / 2;
+    {
+        std::wstring label = std::wstring(L"Mirrorly ") + kVersion, desc;
+        bool offer = update_.state == UPD_AVAILABLE || update_.state == UPD_FAILED;
+        switch (update_.state) {
+        case UPD_CHECKING: desc = L"Checking for updates…"; break;
+        case UPD_UP_TO_DATE: desc = L"You have the latest version"; break;
+        case UPD_AVAILABLE: desc = L"Version " + from_utf8(update_.version) + L" is available"; break;
+        case UPD_DOWNLOADING: desc = L"Downloading " + from_utf8(update_.version) + L"…"; break;
+        case UPD_READY:
+        case UPD_INSTALLING: desc = L"Installing…"; break;
+        case UPD_FAILED: desc = L"Update failed: " + from_utf8(update_.error); break;
+        default: desc = L"Updates are checked automatically"; break;
+        }
+        t.rowText(*this, lx0, lx1 - 150, cy, label.c_str(), desc.c_str());
+        if (offer) t.button(*this, H_UPDATE, L"Update", G_DOWNLOAD, lx1, cy);
+        else if (update_.state != UPD_DOWNLOADING && update_.state != UPD_READY && update_.state != UPD_INSTALLING)
+            t.button(*this, H_UPDATE_CHECK, L"Check", G_REFRESH, lx1, cy);
+    }
+    y = g.bottom + gap;
+
     // ---- Theme picker: a horizontal strip, one card per registered theme
     y = t.sectionTitle(*this, x0, x1, y, L"Theme");
     auto& list = allThemes();
@@ -795,7 +820,15 @@ void App::render() {
         layoutEdit(false, D2D1::RectF());
         if (mirrorActive_) drawMirror(W, H);
         else if (sessionActive_ && audioActive_) { ensureArtwork(); theme_->drawNowPlaying(*this, W, H); }
-        else theme_->drawHome(*this, W, H);
+        else {
+            theme_->drawHome(*this, W, H);
+            bool offer = update_.state == UPD_AVAILABLE || update_.state == UPD_FAILED;
+            if (offer && !updateDialog_) theme_->drawUpdateBadge(*this, W, H);
+        }
+    }
+    if (updateDialog_ && !mirrorActive_) {
+        addHit(H_UPDATE_SCRIM, D2D1::RectF(0, 0, W, H));  // nothing underneath is clickable
+        theme_->drawUpdateDialog(*this, W, H);
     }
     uint64_t now = mn::now_ms();
     if (toastUntil_ && now <= toastUntil_ + 250) {
