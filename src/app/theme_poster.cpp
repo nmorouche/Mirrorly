@@ -554,13 +554,31 @@ public:
     void drawPreview(App& a, D2D1_RECT_F r) override {
         float w = r.right - r.left, h = r.bottom - r.top;
         a.fillRect(r, PAPER);
-        a.giantType(L"NA", r.left - w * 0.04f, r.top - h * 0.28f, h * 0.95f, ACID);
+        // a sample of the home screen, branded rather than showing anyone's PC name
+        a.giantType(L"M", r.left - w * 0.04f, r.top - h * 0.28f, h * 0.95f, ACID);
         a.drawHalftoneOrb(r.left + w * 0.64f, r.top + h * 0.52f, h * 0.30f, 0.0, 0.0f, GUN, ACID);
         if (a.grain_) {
             a.grain_->SetOpacity(0.45f);
             a.rt_->FillRectangle(r, a.grain_);
         }
-        a.pixelBlock(L"NASS", r.left + w * 0.09f, r.top + h * 0.40f, w * 0.6f, 2.5f, COBALT, WHITE);
+        // the cobalt name block, with pixel "lettering" that spells nothing
+        {
+            const float px = 2.5f, pad = px * 2.5f;
+            const int cols = 17, rows = 7;  // three 5-wide glyphs + gaps, 7 rows high like the pixel font
+            float bx = r.left + w * 0.09f, by = r.top + h * 0.40f;
+            a.fillRect(D2D1::RectF(bx, by, bx + cols * px + pad * 2, by + rows * px + pad * 2), COBALT);
+            static const char* glyphs[rows] = {"10111 11010 01110",
+                                               "10001 01011 10011",
+                                               "11101 11001 10101",
+                                               "00101 10111 11001",
+                                               "11101 10001 00111",
+                                               "10001 11011 10101",
+                                               "11111 01110 11101"};
+            for (int y = 0; y < rows; y++)
+                for (int x = 0; x < cols; x++)
+                    if (glyphs[y][x] == '1')
+                        a.fillRect(D2D1::RectF(bx + pad + x * px, by + pad + y * px, bx + pad + (x + 1) * px, by + pad + (y + 1) * px), WHITE);
+        }
         a.fillRect(D2D1::RectF(r.left + w * 0.09f, r.top + h * 0.75f, r.left + w * 0.09f + 6, r.top + h * 0.75f + 6), ACID);
         a.line(r.left + w * 0.09f + 11, r.top + h * 0.75f + 3, r.left + w * 0.5f, r.top + h * 0.75f + 3, INK, 0.8f, 2.0f);
     }
