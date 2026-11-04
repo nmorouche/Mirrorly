@@ -20,7 +20,8 @@
 - **iPhone over USB**, through Personal Hotspot (same Screen Mirroring flow, no Wi-Fi needed)
 - **Audio**, both while mirroring and for music-only AirPlay (ALAC, AAC, AAC-ELD)
 - **Now Playing** view with artwork, title, artist and progress when streaming music
-- **Portable**: a single `Mirrorly.exe` (about 14 MB) with no installer, runtime, Bonjour or iTunes needed
+- **Light install**: a 6 MB setup that needs no administrator rights, runtime, Bonjour or iTunes, and keeps
+  itself up to date (a portable `Mirrorly.exe` is also available)
 - **Themes**, picked at the bottom of Settings (the window and taskbar icon change with them):
   - **Default**: clean and quiet, follows Windows light/dark mode, frosted controls over the video
   - **Acid poster**: concrete-grey paper, giant acid-lime type, a cobalt block with pixel lettering, a halftone object and a live waveform
@@ -30,7 +31,9 @@ Tested with an iPhone on iOS 27.2 and Windows 11.
 
 ## Getting started
 
-1. Download `Mirrorly.exe` from the [latest release](../../releases/latest) and run it.
+1. Download [`Mirrorly-Setup.exe`](../../releases/latest/download/Mirrorly-Setup.exe), run it and click
+   **Install**. Mirrorly installs for your Windows account and opens; you'll find it in the Start menu.
+   (Or run the portable `Mirrorly.exe` from the [latest release](../../releases/latest), with nothing to install.)
 2. When Windows Defender Firewall asks, click **Allow**. Tick both *Private* and *Public* networks.
 3. Connect the iPhone and the PC to the **same network**.
 4. On the iPhone, open **Control Center → Screen Mirroring** and choose your PC.
@@ -144,13 +147,21 @@ Settings are saved in `%APPDATA%\Mirrorly\settings.ini`.
 Mirrorly checks the project's GitHub Releases when it starts and every few hours. When a newer version is out,
 it asks whether to update:
 
-- **Update now** downloads the new `Mirrorly.exe`, checks it against the release's SHA-256 checksum, puts it in
-  place of the running one and restarts. No browser, no installer.
+- **Update now** downloads the new version, checks it against the release's SHA-256 checksum, installs it and
+  restarts. No browser, nothing to click. An installed Mirrorly runs the new `Mirrorly-Setup.exe` silently; the
+  portable `Mirrorly.exe` puts the new exe in place of the running one.
 - **Later** keeps the current version. A *New version* button stays on the home screen (and in
   **Settings → Updates**) for when you're ready.
 
-Updates never interrupt mirroring: the question waits until the session ends. Mirrorly needs to be able to write
-to its own folder to update itself (Downloads or Documents are fine; `C:\Program Files` is not).
+Updates never interrupt mirroring: the question waits until the session ends. The portable `Mirrorly.exe` needs to
+be able to write to its own folder to update itself (Downloads or Documents are fine; `C:\Program Files` is not).
+
+## Installing and uninstalling
+
+`Mirrorly-Setup.exe` installs Mirrorly in `%LOCALAPPDATA%\Programs\Mirrorly` for the current Windows account,
+adds it to the Start menu (and to the desktop if you leave that ticked) and lists it in **Settings → Apps**.
+Uninstall it from there. Your settings are kept unless you choose to delete them.
+`Mirrorly-Setup.exe /S` installs silently.
 
 ## Troubleshooting
 
@@ -225,11 +236,12 @@ The build runs on Linux and cross-compiles for Windows with MinGW-w64.
 
 ```bash
 # Ubuntu / Debian
-sudo apt install build-essential nasm git gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+sudo apt install build-essential nasm git gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 nsis
 
 ./build_ffmpeg.sh win        # minimal static FFmpeg 7.1 for Windows
 ./fetch_android_deps.sh      # adb + scrcpy server (checksums verified)
 ./build_windows.sh           # → out/win/Mirrorly.exe
+./build_installer.sh         # → out/win/Mirrorly-Setup.exe (res/installer/mirrorly.nsi)
 ```
 
 ### Adding a theme
@@ -241,17 +253,23 @@ sudo apt install build-essential nasm git gcc-mingw-w64-x86-64 g++-mingw-w64-x86
 
 ### Releases
 
-Pushing a version tag builds `Mirrorly.exe` on GitHub Actions and publishes it as a GitHub Release:
+Every merge into `main` is released automatically: the *Tag release* workflow tags the merge with the next
+version (`v0.0.5` → `v0.0.6`), then *Build & Release* builds `Mirrorly-Setup.exe` and `Mirrorly.exe` and
+publishes them as a GitHub Release. To merge without releasing, put `[skip release]` in the PR title or the
+merge commit message.
+
+A tag can also be pushed by hand (for a bigger jump, `v0.1.0` for example); the next merge continues from it:
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag -a v0.1.0 -m "Mirrorly v0.1.0"
+git push origin v0.1.0
 ```
 
 The version number in the tag is written into the app's About text and its Windows file properties.
 Installed copies of Mirrorly find the new release by themselves and offer to update.
-The release must contain `Mirrorly.exe` and `Mirrorly.exe.sha256` (the workflow uploads both).
-To build locally with a version: `VERSION=1.0.0 ./build_windows.sh`.
+The release must contain `Mirrorly-Setup.exe` and `Mirrorly.exe`, each with its `.sha256` (the workflow uploads
+all four): installed copies update with the setup, portable ones with the exe.
+To build locally with a version: `VERSION=1.0.0 ./build_windows.sh && VERSION=1.0.0 ./build_installer.sh`.
 
 ### Tests
 

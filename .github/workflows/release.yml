@@ -1,7 +1,9 @@
 name: Build & Release
 
-# Push a tag like v1.0.0 to build Mirrorly.exe and publish a GitHub Release with it.
-# It can also be started by hand (Actions tab → Build & Release → Run workflow) to just build the exe.
+# Builds Mirrorly-Setup.exe (and the portable Mirrorly.exe) for a version tag like v1.0.0 and publishes
+# a GitHub Release with them. "Tag release" (tag.yml) starts it after each merge into main; a tag pushed
+# by hand starts it too. Started by hand on a branch (Actions tab → Build & Release → Run workflow), it
+# only builds.
 on:
   push:
     tags: ["v*"]
@@ -17,10 +19,10 @@ jobs:
       - name: Check out the code
         uses: actions/checkout@v5
 
-      - name: Install the MinGW-w64 toolchain
+      - name: Install the MinGW-w64 toolchain and NSIS
         run: |
           sudo apt-get update
-          sudo apt-get install -y nasm gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+          sudo apt-get install -y nasm gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 nsis
 
       - name: Restore cached FFmpeg
         id: ffmpeg-cache
@@ -36,13 +38,15 @@ jobs:
       - name: Download the Android USB tools (checksums verified)
         run: ./fetch_android_deps.sh
 
-      - name: Build Mirrorly.exe
+      - name: Build Mirrorly.exe and Mirrorly-Setup.exe
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="0.0.0"; fi
           VERSION="$VERSION" REPO="$GITHUB_REPOSITORY" ./build_windows.sh
+          VERSION="$VERSION" REPO="$GITHUB_REPOSITORY" ./build_installer.sh
           mkdir -p dist
-          cp out/win/Mirrorly.exe dist/Mirrorly.exe
-          (cd dist && sha256sum Mirrorly.exe > Mirrorly.exe.sha256)
+          cp out/win/Mirrorly-Setup.exe out/win/Mirrorly.exe dist/
+          # the app checks these before installing an update
+          (cd dist && sha256sum Mirrorly-Setup.exe > Mirrorly-Setup.exe.sha256 && sha256sum Mirrorly.exe > Mirrorly.exe.sha256)
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v6
@@ -61,7 +65,10 @@ jobs:
           Mirror your iPhone, iPad or Android phone to your Windows PC, with sound: over Wi-Fi (AirPlay) or with a USB cable.
 
           ### Download
-          **Mirrorly.exe** below is portable: download it and run it. Nothing to install.
+          **Mirrorly-Setup.exe** below: run it, click **Install**, and Mirrorly opens. It installs for your
+          Windows account only (no administrator rights) and keeps itself up to date.
+
+          Prefer not to install? **Mirrorly.exe** is the portable version: run it from any folder.
 
           ### First run
           1. When Windows Defender Firewall asks, click **Allow** (tick *Private* and *Public*).
@@ -70,7 +77,8 @@ jobs:
 
           Android (USB): turn on **USB debugging** on the phone (Developer options), plug it in and tap **Allow**.
 
-          Windows 10/11, 64-bit. SHA-256 checksum: \`Mirrorly.exe.sha256\`.
+          Windows 10/11, 64-bit. SHA-256 checksums: the \`.sha256\` files.
           NOTES
-          gh release create "$GITHUB_REF_NAME" dist/Mirrorly.exe dist/Mirrorly.exe.sha256 \
+          gh release create "$GITHUB_REF_NAME" dist/Mirrorly-Setup.exe dist/Mirrorly-Setup.exe.sha256 \
+            dist/Mirrorly.exe dist/Mirrorly.exe.sha256 \
             --title "Mirrorly ${GITHUB_REF_NAME}" --notes-file notes.md
