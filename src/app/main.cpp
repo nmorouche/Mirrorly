@@ -8,6 +8,9 @@
 #include <memory>
 #include <thread>
 
+#include <propsys.h>
+#include <shobjidl.h>
+
 #include "log.h"
 #include "platform.h"
 
@@ -129,6 +132,40 @@ void App::readSystemTheme() {
         systemDark_ = false;
 }
 
+// Mirrorly's own taskbar identity. Without it, an installed Mirrorly is tied to its Start-menu shortcut
+// and the taskbar shows the shortcut's icon, ignoring the theme's icon.
+static const wchar_t* const kAppUserModelId = L"Mirrorly.AirPlayReceiver";
+
+static void setWindowStringProp(IPropertyStore* ps, const GUID& fmtid, DWORD pid, const std::wstring& v) {
+    PROPERTYKEY key{fmtid, pid};
+    PROPVARIANT pv;
+    PropVariantInit(&pv);
+    size_t bytes = (v.size() + 1) * sizeof(wchar_t);
+    pv.vt = VT_LPWSTR;
+    pv.pwszVal = (LPWSTR)CoTaskMemAlloc(bytes);
+    if (!pv.pwszVal) return;
+    memcpy(pv.pwszVal, v.c_str(), bytes);
+    ps->SetValue(key, pv);
+    PropVariantClear(&pv);
+}
+
+// Tells the taskbar who this window is and, if it gets pinned, how to start Mirrorly again and which
+// icon to show (the theme's one at the time it is pinned).
+static void setTaskbarIdentity(HWND hwnd, int iconRes) {
+    static const GUID kAppUserModelProps = {0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}};
+    IPropertyStore* ps = nullptr;
+    if (FAILED(SHGetPropertyStoreForWindow(hwnd, IID_PPV_ARGS(&ps))) || !ps) return;
+    wchar_t exe[MAX_PATH * 2];
+    DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH * 2);
+    std::wstring path(exe, n);
+    setWindowStringProp(ps, kAppUserModelProps, 5, kAppUserModelId);                                     // ID
+    setWindowStringProp(ps, kAppUserModelProps, 2, L"\"" + path + L"\"");                                // RelaunchCommand
+    setWindowStringProp(ps, kAppUserModelProps, 4, kAppName);                                           // RelaunchDisplayNameResource
+    setWindowStringProp(ps, kAppUserModelProps, 3, path + L",-" + std::to_wstring(iconRes));             // RelaunchIconResource
+    ps->Commit();
+    ps->Release();
+}
+
 // Applies the current theme to the window: title bar colours, taskbar/window icon, name field.
 void App::applyTheme(bool announce) {
     theme_->onActivate(*this);
@@ -144,6 +181,7 @@ void App::applyTheme(bool announce) {
     int res = theme_->iconResource();
     HICON big = (HICON)LoadImageW(inst_, MAKEINTRESOURCEW(res), IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0);
     HICON small = (HICON)LoadImageW(inst_, MAKEINTRESOURCEW(res), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
+    setTaskbarIdentity(hwnd_, res);
     if (big) SendMessageW(hwnd_, WM_SETICON, ICON_BIG, (LPARAM)big);
     if (small) SendMessageW(hwnd_, WM_SETICON, ICON_SMALL, (LPARAM)small);
 
@@ -957,6 +995,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     typedef BOOL(WINAPI * SetCtx)(HANDLE);
     if (auto fn = (SetCtx)GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext"))
         fn((HANDLE)-4);  // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+
+    SetCurrentProcessExplicitAppUserModelID(kAppUserModelId);  // before any window: see setTaskbarIdentity
 
     // "--updated": started by the previous version right after an update; wait for it to exit
     bool updated = wcsstr(GetCommandLineW(), L"--updated") != nullptr;
