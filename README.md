@@ -253,12 +253,16 @@ sudo apt install build-essential nasm git gcc-mingw-w64-x86-64 g++-mingw-w64-x86
 
 ### Releases
 
-Pushing a version tag builds `Mirrorly-Setup.exe` and `Mirrorly.exe` on GitHub Actions and publishes them as a
-GitHub Release:
+Every merge into `main` is released automatically: the *Tag release* workflow tags the merge with the next
+version (`v0.0.5` → `v0.0.6`), then *Build & Release* builds `Mirrorly-Setup.exe` and `Mirrorly.exe` and
+publishes them as a GitHub Release. To merge without releasing, put `[skip release]` in the PR title or the
+merge commit message.
+
+A tag can also be pushed by hand (for a bigger jump, `v0.1.0` for example); the next merge continues from it:
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag -a v0.1.0 -m "Mirrorly v0.1.0"
+git push origin v0.1.0
 ```
 
 The version number in the tag is written into the app's About text and its Windows file properties.

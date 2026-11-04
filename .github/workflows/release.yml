@@ -1,8 +1,9 @@
 name: Build & Release
 
-# Push a tag like v1.0.0 to build Mirrorly-Setup.exe (and the portable Mirrorly.exe) and publish a
-# GitHub Release with them. It can also be started by hand (Actions tab → Build & Release → Run
-# workflow) to just build them.
+# Builds Mirrorly-Setup.exe (and the portable Mirrorly.exe) for a version tag like v1.0.0 and publishes
+# a GitHub Release with them. "Tag release" (tag.yml) starts it after each merge into main; a tag pushed
+# by hand starts it too. Started by hand on a branch (Actions tab → Build & Release → Run workflow), it
+# only builds.
 on:
   push:
     tags: ["v*"]

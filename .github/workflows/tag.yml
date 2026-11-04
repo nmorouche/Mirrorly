@@ -1,0 +1,52 @@
+name: Tag release
+
+# Every merge into main gets the next version tag (v0.0.5 → v0.0.6, same "Mirrorly vX.Y.Z" message as
+# hand-made tags), then starts "Build & Release" on that tag.
+# Put [skip release] in the merge commit message (or the PR title) to merge without releasing.
+#
+# A tag pushed with the workflow's own token doesn't trigger other workflows (GitHub's rule against
+# loops), so the release workflow is started explicitly; tags pushed by hand still trigger it as before.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write  # push the tag
+  actions: write   # start the release workflow
+
+concurrency:
+  group: tag-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the code with its tags
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Create the next version tag
+        id: tag
+        run: |
+          if git tag --points-at HEAD | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "This commit already has a version tag: nothing to do."
+            exit 0
+          fi
+          last=$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+          IFS=. read -r major minor patch <<< "${last:-v0.0.0}"
+          next="${major}.${minor}.$((patch + 1))"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$next" -m "Mirrorly $next"
+          git push origin "$next"
+          echo "Tagged $next (previous: ${last:-none})"
+          echo "tag=$next" >> "$GITHUB_OUTPUT"
+
+      - name: Start Build & Release for the new tag
+        if: steps.tag.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "${{ steps.tag.outputs.tag }}"
