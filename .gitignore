@@ -9,3 +9,4 @@ out/
 *.zip
 *.bundle
 deps/
+__pycache__/
