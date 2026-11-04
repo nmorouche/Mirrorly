@@ -369,6 +369,7 @@ public:
     } update_;
     bool updateDialog_ = false, updatePromptPending_ = false, updateInstallPending_ = false, justUpdated_ = false;
     std::wstring relaunch_;  // set when an update is installed: started after the app closes
+    bool updateViaSetup_ = false;  // the pending update runs Mirrorly-Setup.exe
 
     // phone control state
     std::vector<KeyZone> zones_;

@@ -1,10 +1,13 @@
 // Mirrorly - automatic updates from the project's GitHub Releases
 //
-// 1. Ask GitHub for the latest release (tag + Mirrorly.exe + Mirrorly.exe.sha256).
-// 2. If it is newer, the app offers it. Updating downloads the exe next to the running one,
-//    checks its SHA-256, renames the running exe to Mirrorly.exe.old (Windows allows renaming
-//    a running program), puts the new one in its place, and restarts into it.
-// 3. The new instance deletes Mirrorly.exe.old.
+// 1. Ask GitHub for the latest release (tag, Mirrorly-Setup.exe and Mirrorly.exe, each with a
+//    .sha256 next to it).
+// 2. If it is newer, the app offers it. Updating downloads the file and checks its SHA-256.
+//    - Installed copy (the setup's uninstaller sits next to the exe): the new setup runs silently
+//      with /UPDATE, waits for Mirrorly to exit, installs and starts the new version.
+//    - Portable copy: the running exe is renamed to Mirrorly.exe.old (Windows allows renaming a
+//      running program), the new one takes its place, and Mirrorly restarts into it.
+// 3. The new instance deletes what is left (Mirrorly.exe.old, the downloaded setup).
 #include "app.h"
 
 #include <bcrypt.h>
@@ -156,10 +159,30 @@ std::wstring exePath() {
     return std::wstring(p, n);
 }
 
+// Installed by Mirrorly-Setup.exe (rather than a portable Mirrorly.exe)
+bool installedCopy() {
+    std::wstring e = exePath();
+    std::wstring dir = e.substr(0, e.find_last_of(L"\\/") + 1);
+    return GetFileAttributesW((dir + L"Uninstall Mirrorly.exe").c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+// where the updater saves the new setup
+std::wstring setupDownloadPath() {
+    wchar_t t[MAX_PATH + 1];
+    DWORD n = GetTempPathW(MAX_PATH + 1, t);
+    return std::wstring(t, n) + L"Mirrorly-Setup-update.exe";
+}
+
+bool endsWith(const std::string& s, const char* tail) {
+    size_t n = strlen(tail);
+    return s.size() >= n && s.compare(s.size() - n, n, tail) == 0;
+}
+
 // shared with the worker threads (never touch the App from them: they may outlive it)
 std::atomic<bool> g_busy{false};
 std::mutex g_m;
-std::string g_exeUrl, g_shaUrl;
+std::string g_exeUrl, g_shaUrl;  // what the update downloads (the setup or the exe)
+bool g_viaSetup = false;
 
 void postUpdate(HWND hwnd, int state, const std::string& version, const std::string& error, float progress) {
     Event* e = new Event();
@@ -208,16 +231,24 @@ void App::checkForUpdate(bool manual) {
         std::string body, err;
         bool ok = httpGet(url, &body, nullptr, nullptr, err);
         std::string tag = ok ? jsonString(body, "tag_name") : "";
-        std::string exeUrl, shaUrl;
+        std::string exeUrl, shaUrl, setupUrl, setupShaUrl;
         for (size_t at = 0;;) {
             std::string u = jsonString(body, "browser_download_url", at, &at);
             if (u.empty()) break;
-            if (u.size() >= 13 && u.compare(u.size() - 13, 13, "/Mirrorly.exe") == 0) exeUrl = u;
-            if (u.size() >= 20 && u.compare(u.size() - 20, 20, "/Mirrorly.exe.sha256") == 0) shaUrl = u;
+            if (endsWith(u, "/Mirrorly.exe")) exeUrl = u;
+            if (endsWith(u, "/Mirrorly.exe.sha256")) shaUrl = u;
+            if (endsWith(u, "/Mirrorly-Setup.exe")) setupUrl = u;
+            if (endsWith(u, "/Mirrorly-Setup.exe.sha256")) setupShaUrl = u;
+        }
+        // installed copies update through the setup, portable ones swap the exe
+        bool viaSetup = !setupUrl.empty() && (installedCopy() || exeUrl.empty());
+        if (viaSetup) {
+            exeUrl = setupUrl;
+            shaUrl = setupShaUrl;
         }
         g_busy = false;
         if (!ok || tag.empty() || exeUrl.empty()) {
-            mn::logf(mn::LogLevel::Info, "update: check failed (%s)", ok ? "no Mirrorly.exe in the latest release" : err.c_str());
+            mn::logf(mn::LogLevel::Info, "update: check failed (%s)", ok ? "nothing to download in the latest release" : err.c_str());
             postUpdate(hwnd, manual ? UPD_CHECK_FAILED : UPD_NONE, "", ok ? "No download in the latest release" : err, 0);
             return;
         }
@@ -229,6 +260,7 @@ void App::checkForUpdate(bool manual) {
             std::lock_guard<std::mutex> lk(g_m);
             g_exeUrl = exeUrl;
             g_shaUrl = shaUrl;
+            g_viaSetup = viaSetup;
         }
         postUpdate(hwnd, newer ? UPD_AVAILABLE : UPD_UP_TO_DATE, ver, "", 0);
     }).detach();
@@ -237,23 +269,28 @@ void App::checkForUpdate(bool manual) {
 void App::startUpdate() {
     if (update_.state == UPD_DOWNLOADING || update_.state == UPD_INSTALLING || g_busy.exchange(true)) return;
     std::string exeUrl, shaUrl;
+    bool viaSetup;
     {
         std::lock_guard<std::mutex> lk(g_m);
         exeUrl = g_exeUrl;
         shaUrl = g_shaUrl;
+        viaSetup = g_viaSetup;
     }
     std::string version = update_.version;
     update_.state = UPD_DOWNLOADING;
     update_.progress = 0;
     update_.error.clear();
     HWND hwnd = hwnd_;
-    std::wstring target = exePath() + L".download";
+    std::wstring target = viaSetup ? setupDownloadPath() : exePath() + L".download";
+    updateViaSetup_ = viaSetup;
     mn::logf(mn::LogLevel::Info, "update: downloading %s", exeUrl.c_str());
-    std::thread([hwnd, exeUrl, shaUrl, version, target]() {
+    std::thread([hwnd, exeUrl, shaUrl, version, target, viaSetup]() {
         std::string err;
         HANDLE f = CreateFileW(target.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         bool ok = f != INVALID_HANDLE_VALUE;
-        if (!ok) err = "Mirrorly can't write to its folder. Move Mirrorly.exe to a folder you own (Documents, for example).";
+        if (!ok)
+            err = viaSetup ? "Mirrorly can't save the update to the Temp folder."
+                           : "Mirrorly can't write to its folder. Move Mirrorly.exe to a folder you own (Documents, for example).";
         uint64_t lastPost = 0;
         if (ok) {
             ok = httpGet(exeUrl, nullptr, f, [&](uint64_t done, uint64_t total) {
@@ -288,8 +325,27 @@ void App::startUpdate() {
     }).detach();
 }
 
-// Swaps the exe files and arranges the restart (runs on the UI thread).
+// Swaps the exe files (or starts the new setup) and arranges the restart (runs on the UI thread).
 void App::installUpdate() {
+    if (updateViaSetup_) {
+        // the setup waits for this process to exit, installs, then starts the new version
+        std::wstring setup = setupDownloadPath();
+        std::wstring cmd = L"\"" + setup + L"\" /S /UPDATE";
+        STARTUPINFOW si{sizeof(si)};
+        PROCESS_INFORMATION pi{};
+        if (!CreateProcessW(setup.c_str(), &cmd[0], nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+            update_.state = UPD_FAILED;
+            update_.error = "could not start the installer (error " + std::to_string(GetLastError()) + ")";
+            return;
+        }
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        mn::logf(mn::LogLevel::Info, "update: installer for %s started, closing", update_.version.c_str());
+        relaunch_.clear();
+        update_.state = UPD_INSTALLING;
+        DestroyWindow(hwnd_);
+        return;
+    }
     std::wstring exe = exePath(), old = exe + L".old", dl = exe + L".download";
     DeleteFileW(old.c_str());
     if (!MoveFileExW(exe.c_str(), old.c_str(), MOVEFILE_REPLACE_EXISTING)) {
@@ -312,12 +368,14 @@ void App::installUpdate() {
 
 // Called at startup: remove what the previous version left behind.
 void App::cleanupAfterUpdate(bool justUpdated) {
-    std::wstring old = exePath() + L".old", dl = exePath() + L".download";
+    std::wstring old = exePath() + L".old", dl = exePath() + L".download", setup = setupDownloadPath();
     DeleteFileW(dl.c_str());
-    if (GetFileAttributesW(old.c_str()) != INVALID_FILE_ATTRIBUTES) {
-        std::thread([old]() {
-            for (int i = 0; i < 50 && !DeleteFileW(old.c_str()); i++) Sleep(200);  // the old process may still be exiting
-        }).detach();
+    for (const std::wstring& f : {old, setup}) {
+        if (GetFileAttributesW(f.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            std::thread([f]() {
+                for (int i = 0; i < 50 && !DeleteFileW(f.c_str()); i++) Sleep(200);  // still exiting
+            }).detach();
+        }
     }
     if (justUpdated) showToast(std::wstring(L"Mirrorly is up to date: version ") + kVersion);
 }
